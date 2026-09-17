@@ -57,11 +57,6 @@ class AITestResult(BaseModel):
     reply: Optional[str] = None
 
 
-class CompanyEnrichOut(BaseModel):
-    company_id: str
-    suggestions: dict[str, Any]
-
-
 # ---------------- 行业 ----------------
 class IndustryIn(BaseModel):
     code: str = Field(..., description="行业编码（唯一标识）")
@@ -74,26 +69,17 @@ class IndustryOut(IndustryIn):
 
 
 # ---------------- 企业 ----------------
+# 当前只保留企业名称 + 所属行业（Industry 节点关系）。
+# 历史遗留字段（description / address / founded_year / scale / website / extra）
+# 已移除，Neo4j 中残存的属性将随下一次写入被自动清理（COALESCE 只更新 name）。
 class CompanyIn(BaseModel):
-    name: str
-    industry_code: Optional[str] = Field(None, description="所属行业编码")
-    description: Optional[str] = None
-    address: Optional[str] = None
-    founded_year: Optional[int] = None
-    scale: Optional[str] = Field(None, description="规模，如 small/medium/large")
-    website: Optional[str] = None
-    extra: Optional[dict[str, Any]] = None
+    name: str = Field(..., min_length=1, max_length=200, description="企业名称")
+    industry_code: Optional[str] = Field(None, description="所属行业编码（指向 Industry 节点）")
 
 
 class CompanyUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
     industry_code: Optional[str] = None
-    description: Optional[str] = None
-    address: Optional[str] = None
-    founded_year: Optional[int] = None
-    scale: Optional[str] = None
-    website: Optional[str] = None
-    extra: Optional[dict[str, Any]] = None
 
 
 class CompanyOut(BaseModel):
@@ -101,12 +87,6 @@ class CompanyOut(BaseModel):
     name: str
     industry_code: Optional[str] = None
     industry_name: Optional[str] = None
-    description: Optional[str] = None
-    address: Optional[str] = None
-    founded_year: Optional[int] = None
-    scale: Optional[str] = None
-    website: Optional[str] = None
-    extra: Optional[dict[str, Any]] = None
 
 
 # ---------------- 关系 ----------------

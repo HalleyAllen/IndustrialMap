@@ -1,5 +1,20 @@
 // 与后端 Pydantic 模型对齐的 TS 类型
 
+// 关系类型英文代码 → 中文含义（与 backend/app/routers/relations.py 的 _ALLOWED_TYPES 对齐）
+export const RELATION_TYPE_LABELS: Record<string, string> = {
+  SUPPLIES: '供货',
+  PURCHASES_FROM: '采购',
+  COMPETES_WITH: '竞争',
+  PARTNER_OF: '合作',
+  SUBSIDIARY_OF: '子公司',
+  INVESTED_BY: '被投资',
+  CUSTOMER_OF: '客户',
+}
+
+export function relationTypeLabel(type: string): string {
+  return RELATION_TYPE_LABELS[type] ?? type
+}
+
 export interface Neo4jSettingsOut {
   uri: string
   user: string
@@ -30,28 +45,17 @@ export interface Industry {
   company_count?: number
 }
 
+// 企业节点当前只保留名称 + 所属行业（行业通过关系承载）
 export interface Company {
   id: string
   name: string
   industry_code?: string | null
   industry_name?: string | null
-  description?: string | null
-  address?: string | null
-  founded_year?: number | null
-  scale?: string | null
-  website?: string | null
-  extra?: Record<string, unknown> | null
 }
 
 export interface CompanyIn {
   name: string
   industry_code?: string | null
-  description?: string | null
-  address?: string | null
-  founded_year?: number | null
-  scale?: string | null
-  website?: string | null
-  extra?: Record<string, unknown> | null
 }
 
 export interface RelationIn {
@@ -120,12 +124,5 @@ export interface AIStatus {
 
 export interface CompanyEnrichOut {
   company_id: string
-  suggestions: {
-    description?: string | null
-    website?: string | null
-    founded_year?: number | null
-    address?: string | null
-    scale?: string | null
-    raw?: string
-  }
+  suggestions: Record<string, unknown>
 }

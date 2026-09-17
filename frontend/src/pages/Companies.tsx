@@ -5,7 +5,6 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
   Select,
   Space,
   Popconfirm,
@@ -14,12 +13,11 @@ import {
   Card,
   Tabs,
   Tag,
-  Alert,
-  Spin,
 } from 'antd'
-import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { PlusOutlined } from '@ant-design/icons'
 import { companiesApi, industriesApi, relationsApi } from '../api/client'
-import type { Company, CompanyEnrichOut, CompanyIn, Industry, RelationIn } from '../types'
+import type { Company, CompanyIn, Industry, RelationIn } from '../types'
+import { relationTypeLabel } from '../types'
 
 export default function CompaniesPage() {
   const [data, setData] = useState<Company[]>([])
@@ -36,18 +34,11 @@ export default function CompaniesPage() {
   const [relForm] = Form.useForm<RelationIn>()
   const [relTypes, setRelTypes] = useState<string[]>([])
 
-  // AI 补全状态
-  const [enrichTarget, setEnrichTarget] = useState<Company | null>(null)
-  const [enrichLoading, setEnrichLoading] = useState(false)
-  const [enrichResult, setEnrichResult] = useState<CompanyEnrichOut | null>(null)
-  const [enrichForm] = Form.useForm<{
-    description?: string
-    website?: string
-    founded_year?: number | null
-    address?: string
-    scale?: string
-  }>()
-  const [enrichHint, setEnrichHint] = useState('')
+  const extractError = (e: any): string => {
+    const detail = e?.response?.data?.detail
+    if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail)
+    return e?.message || '未知错误'
+  }
 
   const load = async () => {
     setLoading(true)
@@ -59,7 +50,7 @@ export default function CompaniesPage() {
         }),
       )
     } catch (e: any) {
-      message.error(e?.message ?? '加载失败')
+      message.error(`加载失败：${extractError(e)}`)
     } finally {
       setLoading(false)
     }
@@ -85,18 +76,19 @@ export default function CompaniesPage() {
     form.setFieldsValue({
       name: c.name,
       industry_code: c.industry_code ?? undefined,
-      description: c.description ?? undefined,
-      address: c.address ?? undefined,
-      founded_year: c.founded_year ?? undefined,
-      scale: c.scale ?? undefined,
-      website: c.website ?? undefined,
     })
     setOpen(true)
   }
 
   const onSubmit = async () => {
+    let values: CompanyIn
     try {
-      const values = await form.validateFields()
+      values = await form.validateFields()
+    } catch {
+      message.error('请先填写企业名称')
+      return
+    }
+    try {
       if (editing) {
         await companiesApi.update(editing.id, values)
         message.success('已更新')
@@ -107,8 +99,7 @@ export default function CompaniesPage() {
       setOpen(false)
       load()
     } catch (e: any) {
-      if (e?.errorFields) return
-      message.error(e?.message ?? '保存失败')
+      message.error(`保存失败：${extractError(e)}`)
     }
   }
 
@@ -118,7 +109,7 @@ export default function CompaniesPage() {
       message.success(`已删除 ${r.deleted} 个企业`)
       load()
     } catch (e: any) {
-      message.error(e?.message ?? '删除失败')
+      message.error(`删除失败：${extractError(e)}`)
     }
   }
 
@@ -135,68 +126,7 @@ export default function CompaniesPage() {
       relForm.resetFields()
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.message ?? '创建失败')
-    }
-  }
-
-  // ===== AI 补全 =====
-  const onOpenEnrich = (c: Company) => {
-    setEnrichTarget(c)
-    setEnrichResult(null)
-    setEnrichHint('')
-    enrichForm.setFieldsValue({
-      description: c.description ?? '',
-      website: c.website ?? '',
-      founded_year: c.founded_year ?? null,
-      address: c.address ?? '',
-      scale: c.scale ?? '',
-    })
-  }
-
-  const onRunEnrich = async () => {
-    if (!enrichTarget) return
-    setEnrichLoading(true)
-    try {
-      const r = await companiesApi.enrich(enrichTarget.id, {
-        user_hint: enrichHint || undefined,
-      })
-      setEnrichResult(r)
-      // 把建议值合并进表单（仅当现有为空时填充；保留人工数据）
-      enrichForm.setFieldsValue({
-        description: r.suggestions.description || enrichTarget.description || '',
-        website: r.suggestions.website || enrichTarget.website || '',
-        founded_year: r.suggestions.founded_year ?? enrichTarget.founded_year ?? null,
-        address: r.suggestions.address || enrichTarget.address || '',
-        scale: r.suggestions.scale || enrichTarget.scale || '',
-      })
-      message.success('AI 补全完成，请确认后再写入')
-    } catch (e: any) {
-      message.error(e?.message ?? 'AI 补全失败')
-    } finally {
-      setEnrichLoading(false)
-    }
-  }
-
-  const onApplyEnrich = async () => {
-    if (!enrichTarget) return
-    try {
-      const values = await enrichForm.validateFields()
-      // 仅传非空字段
-      const payload: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(values)) {
-        if (v !== '' && v !== null && v !== undefined) payload[k] = v
-      }
-      if (Object.keys(payload).length === 0) {
-        message.warning('没有可写入的字段')
-        return
-      }
-      const r = await companiesApi.applyEnrichment(enrichTarget.id, payload)
-      message.success(`已写入 ${r.written} 个字段`)
-      setEnrichTarget(null)
-      load()
-    } catch (e: any) {
-      if (e?.errorFields) return
-      message.error(e?.message ?? '写入失败')
+      message.error(`创建失败：${extractError(e)}`)
     }
   }
 
@@ -243,33 +173,25 @@ export default function CompaniesPage() {
                   rowKey="id"
                   dataSource={data}
                   pagination={{ pageSize: 20, showSizeChanger: true }}
+                  locale={{ emptyText: '暂无企业，点击右上角「新增企业」开始添加' }}
                   columns={[
-                    { title: '名称', dataIndex: 'name', width: 220 },
+                    { title: '企业名称', dataIndex: 'name', width: 320 },
                     {
-                      title: '行业',
+                      title: '所属行业',
                       dataIndex: 'industry_name',
-                      width: 160,
-                      render: (v, r) => v ? <Tag color="blue">{v}</Tag> : <Tag>未分类</Tag>,
+                      width: 200,
+                      render: (v) => v ? <Tag color="blue">{v}</Tag> : <Tag>未分类</Tag>,
                     },
-                    { title: '地址', dataIndex: 'address', ellipsis: true },
-                    { title: '成立年份', dataIndex: 'founded_year', width: 100 },
-                    {
-                      title: '规模',
-                      dataIndex: 'scale',
-                      width: 100,
-                      render: (v) => v ? <Tag>{v}</Tag> : '-',
-                    },
-                    { title: '描述', dataIndex: 'description', ellipsis: true },
                     {
                       title: '操作',
-                      width: 240,
+                      width: 200,
                       render: (_, r) => (
                         <Space>
-                          <Button type="link" icon={<ThunderboltOutlined />} onClick={() => onOpenEnrich(r)}>
-                            AI 补全
-                          </Button>
                           <Button type="link" onClick={() => onEdit(r)}>编辑</Button>
-                          <Popconfirm title="确定删除？会同时删除其所有关系" onConfirm={() => onDelete(r.id)}>
+                          <Popconfirm
+                            title="确定删除？会同时删除其所有关系"
+                            onConfirm={() => onDelete(r.id)}
+                          >
                             <Button type="link" danger>删除</Button>
                           </Popconfirm>
                         </Space>
@@ -283,7 +205,7 @@ export default function CompaniesPage() {
         ]}
       />
 
-      {/* 创建/编辑企业 */}
+      {/* 创建 / 编辑企业：只保留名称 + 所属行业 */}
       <Modal
         open={open}
         title={editing ? '编辑企业' : '新增企业'}
@@ -291,41 +213,24 @@ export default function CompaniesPage() {
         onOk={onSubmit}
         okText="保存"
         cancelText="取消"
-        width={640}
         destroyOnClose
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="企业名称" name="name" rules={[{ required: true }]}>
-            <Input />
+          <Form.Item
+            label="企业名称"
+            name="name"
+            rules={[{ required: true, message: '请填写企业名称' }]}
+          >
+            <Input placeholder="如：华为技术有限公司" autoFocus />
           </Form.Item>
           <Form.Item label="所属行业" name="industry_code">
             <Select
               allowClear
-              placeholder="选择行业"
+              placeholder="选择行业（可留空）"
               options={industries.map((i) => ({ value: i.code, label: i.name }))}
+              showSearch
+              optionFilterProp="label"
             />
-          </Form.Item>
-          <Form.Item label="成立年份" name="founded_year">
-            <InputNumber min={1800} max={2100} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="规模" name="scale">
-            <Select
-              allowClear
-              options={[
-                { value: 'small', label: '小型' },
-                { value: 'medium', label: '中型' },
-                { value: 'large', label: '大型' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="地址" name="address">
-            <Input />
-          </Form.Item>
-          <Form.Item label="官网" name="website">
-            <Input placeholder="https://" />
-          </Form.Item>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
       </Modal>
@@ -344,7 +249,10 @@ export default function CompaniesPage() {
           <Form.Item label="关系类型" name="type" rules={[{ required: true }]}>
             <Select
               placeholder="选择关系类型"
-              options={relTypes.map((t) => ({ value: t, label: t }))}
+              options={relTypes.map((t) => ({
+                value: t,
+                label: `${relationTypeLabel(t)}（${t}）`,
+              }))}
             />
           </Form.Item>
           <Form.Item label="起点企业" name="from_id" rules={[{ required: true }]}>
@@ -368,68 +276,6 @@ export default function CompaniesPage() {
             />
           </Form.Item>
         </Form>
-      </Modal>
-
-      {/* AI 补全 Modal */}
-      <Modal
-        open={!!enrichTarget}
-        title={enrichTarget ? `AI 补全：${enrichTarget.name}` : ''}
-        onCancel={() => setEnrichTarget(null)}
-        onOk={onApplyEnrich}
-        okText="应用建议并写入"
-        cancelText="关闭"
-        width={720}
-        destroyOnClose
-        confirmLoading={enrichLoading}
-      >
-        <Spin spinning={enrichLoading}>
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="AI 将根据企业名称与已知字段推断缺失信息，可在下方补充提示"
-          />
-          <Input.TextArea
-            placeholder="可选：补充提示，例如「请补充该公司的工商注册信息和主营业务」"
-            rows={2}
-            value={enrichHint}
-            onChange={(e) => setEnrichHint(e.target.value)}
-            style={{ marginBottom: 12 }}
-          />
-          <Space style={{ marginBottom: 16 }}>
-            <Button type="primary" icon={<ThunderboltOutlined />} onClick={onRunEnrich}>
-              调用 AI 生成建议
-            </Button>
-            {enrichResult && (
-              <span style={{ color: '#999' }}>已生成建议，可在下方编辑后应用</span>
-            )}
-          </Space>
-
-          <Form form={enrichForm} layout="vertical">
-            <Form.Item label="简介" name="description">
-              <Input.TextArea rows={3} />
-            </Form.Item>
-            <Form.Item label="官网" name="website">
-              <Input placeholder="https://..." />
-            </Form.Item>
-            <Form.Item label="成立年份" name="founded_year">
-              <InputNumber min={1700} max={2100} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="地址" name="address">
-              <Input />
-            </Form.Item>
-            <Form.Item label="规模" name="scale">
-              <Select
-                allowClear
-                options={[
-                  { value: 'small', label: '小型' },
-                  { value: 'medium', label: '中型' },
-                  { value: 'large', label: '大型' },
-                ]}
-              />
-            </Form.Item>
-          </Form>
-        </Spin>
       </Modal>
     </Card>
   )

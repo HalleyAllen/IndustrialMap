@@ -73,6 +73,19 @@ function Neo4jPanel({ onConfigured }: { onConfigured?: () => void }) {
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<Neo4jTestResult | null>(null)
+  const [connStatus, setConnStatus] = useState<{
+    configured: boolean
+    connected: boolean
+    error?: string
+  } | null>(null)
+
+  const refreshStatus = async () => {
+    try {
+      setConnStatus(await settingsApi.status())
+    } catch {
+      setConnStatus(null)
+    }
+  }
 
   const loadCurrent = async () => {
     setLoading(true)
@@ -95,46 +108,130 @@ function Neo4jPanel({ onConfigured }: { onConfigured?: () => void }) {
       })
     } finally {
       setLoading(false)
+      refreshStatus()
     }
   }
 
   useEffect(() => {
     loadCurrent()
+    // 定期刷新状态（数据库可能因外部原因掉线）
+    const timer = setInterval(refreshStatus, 15000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /** 提取后端错误信息（axios 抛错时通常在 e.response.data.detail）。 */
+  const extractError = (e: any): string => {
+    const detail = e?.response?.data?.detail
+    if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail)
+    return e?.message || '未知错误'
+  }
+
   const onTest = async () => {
+    // 仅校验 uri/user/database 三项；密码对"测试连接"是可选的
+    const requiredKeys = ['uri', 'user', 'database'] as const
+    let values: Partial<Neo4jSettingsIn> = {}
     try {
-      const values = await form.validateFields()
-      setTesting(true)
-      setTestResult(null)
-      const r = await settingsApi.test(values)
-      setTestResult(r)
-      r.ok ? message.success('连接成功') : message.error(r.error ?? '连接失败')
+      values = await form.validateFields(requiredKeys as unknown as [])
     } catch {
-      /* form error */
+      message.error('请先补全带 * 号的必填项')
+      return
+    }
+    if (!values.password) {
+      if (current?.password_set) {
+        // 已存在保存的密码，使用后端已存储的密码（接口允许空密码做"用旧密码"测试）
+        values.password = ''
+      } else {
+        message.warning('尚未保存任何密码，请先填写密码再测试')
+        return
+      }
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await settingsApi.test(values as Neo4jSettingsIn)
+      setTestResult(r)
+      if (r.ok) {
+        message.success('连接成功')
+      } else {
+        message.error(`连接失败：${r.error ?? '请检查地址、端口、账号密码'}`)
+      }
+    } catch (e: any) {
+      const msg = extractError(e)
+      setTestResult({ ok: false, error: msg })
+      message.error(`测试请求失败：${msg}`)
     } finally {
       setTesting(false)
+      refreshStatus()
     }
   }
 
   const onSave = async () => {
+    let values: Neo4jSettingsIn
     try {
-      const values = await form.validateFields()
-      if (!values.password) {
-        message.warning('保存配置需要填写密码')
-        return
-      }
+      values = await form.validateFields()
+    } catch {
+      message.error('请先补全带 * 号的必填项')
+      return
+    }
+    if (!values.password) {
+      message.warning('保存配置必须填写密码（即使数据库本身没设密码）')
+      return
+    }
+    try {
       const saved = await settingsApi.save(values)
       setCurrent(saved)
       message.success('配置已保存，Neo4j 客户端已重载')
       onConfigured?.()
+      refreshStatus()
     } catch (e: any) {
-      message.error(e?.message ?? '保存失败')
+      message.error(`保存失败：${extractError(e)}`)
     }
+  }
+
+  /** 渲染顶部"实时连接状态"卡片 */
+  const renderStatusAlert = () => {
+    if (connStatus === null) return null
+    if (!connStatus.configured) {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="尚未配置 Neo4j"
+          description="请填写下方的连接信息并保存"
+        />
+      )
+    }
+    if (connStatus.connected) {
+      return (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="数据库已连接"
+          description="当前保存的 Neo4j 配置可用，无需重新连接"
+        />
+      )
+    }
+    return (
+      <Alert
+        type="error"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="数据库不可达"
+        description={
+          connStatus.error ||
+          '后端尝试连接已保存的 Neo4j 配置失败，请检查地址/账号密码/数据库是否启动'
+        }
+      />
+    )
   }
 
   return (
     <Spin spinning={loading}>
+      {renderStatusAlert()}
+
       <Card>
         <Form form={form} layout="vertical">
           <Form.Item
@@ -145,21 +242,28 @@ function Neo4jPanel({ onConfigured }: { onConfigured?: () => void }) {
           >
             <Input placeholder="bolt://localhost:7687" />
           </Form.Item>
-          <Form.Item label="用户名" name="user" rules={[{ required: true }]}>
+          <Form.Item
+            label="用户名"
+            name="user"
+            rules={[{ required: true, message: '请填写用户名' }]}
+          >
             <Input placeholder="neo4j" />
           </Form.Item>
           <Form.Item
             label="密码"
             name="password"
-            rules={[{ required: true, message: '请填写密码' }]}
-            extra={current?.password_set ? '已设置密码，保存时如留空将不被允许' : undefined}
+            extra={
+              current?.password_set
+                ? '已设置密码。留空可使用已保存的密码进行测试，但保存必填'
+                : '测试连接和保存都需要填写'
+            }
           >
             <Input.Password placeholder="neo4j" />
           </Form.Item>
           <Form.Item
             label="默认数据库"
             name="database"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: '请填写数据库名' }]}
             extra="默认 neo4j；若使用多库可填具体库名"
           >
             <Input placeholder="neo4j" />
@@ -186,7 +290,9 @@ function Neo4jPanel({ onConfigured }: { onConfigured?: () => void }) {
                   <Descriptions.Item label="版本类型">{testResult.edition}</Descriptions.Item>
                 </Descriptions>
               ) : (
-                testResult.error
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {testResult.error || '未知错误'}
+                </pre>
               )
             }
           />
@@ -217,6 +323,19 @@ function AIPanel() {
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<AITestResult | null>(null)
+  const [aiStatus, setAiStatus] = useState<{
+    configured: boolean
+    provider?: string
+    model?: string
+  } | null>(null)
+
+  const refreshStatus = async () => {
+    try {
+      setAiStatus(await settingsApi.aiStatus())
+    } catch {
+      setAiStatus(null)
+    }
+  }
 
   const loadCurrent = async () => {
     setLoading(true)
@@ -242,11 +361,13 @@ function AIPanel() {
       })
     } finally {
       setLoading(false)
+      refreshStatus()
     }
   }
 
   useEffect(() => {
     loadCurrent()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 切换 provider 时自动填充 base_url / model
@@ -257,38 +378,97 @@ function AIPanel() {
     }
   }
 
+  const extractError = (e: any): string => {
+    const detail = e?.response?.data?.detail
+    if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail)
+    return e?.message || '未知错误'
+  }
+
   const onTest = async () => {
+    const requiredKeys = ['provider', 'base_url', 'model'] as const
+    let values: Partial<AISettingsIn> = {}
     try {
-      const values = await form.validateFields()
-      setTesting(true)
-      setTestResult(null)
-      const r = await settingsApi.aiTest(values)
-      setTestResult(r)
-      r.ok ? message.success('连通成功') : message.error(r.error ?? '连通失败')
+      values = await form.validateFields(requiredKeys as unknown as [])
     } catch {
-      /* form error */
+      message.error('请先补全带 * 号的必填项')
+      return
+    }
+    if (!values.api_key) {
+      if (current?.api_key_set) {
+        values.api_key = ''
+      } else {
+        message.warning('尚未保存任何 API Key，请先填写再测试（本地 Ollama 可填占位符）')
+        return
+      }
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await settingsApi.aiTest(values as AISettingsIn)
+      setTestResult(r)
+      if (r.ok) {
+        message.success(`连通成功，模型回复：${r.reply ?? ''}`)
+      } else {
+        message.error(`连通失败：${r.error ?? '请检查 Base URL / API Key / 模型名'}`)
+      }
+    } catch (e: any) {
+      const msg = extractError(e)
+      setTestResult({ ok: false, error: msg })
+      message.error(`测试请求失败：${msg}`)
     } finally {
       setTesting(false)
     }
   }
 
   const onSave = async () => {
+    let values: AISettingsIn
     try {
-      const values = await form.validateFields()
-      if (!values.api_key) {
-        message.warning('保存配置需要填写 API Key')
-        return
-      }
+      values = await form.validateFields()
+    } catch {
+      message.error('请先补全带 * 号的必填项')
+      return
+    }
+    if (!values.api_key) {
+      message.warning('保存配置必须填写 API Key')
+      return
+    }
+    try {
       const saved = await settingsApi.aiSave(values)
       setCurrent(saved)
       message.success('AI 配置已保存')
+      refreshStatus()
     } catch (e: any) {
-      message.error(e?.message ?? '保存失败')
+      message.error(`保存失败：${extractError(e)}`)
     }
+  }
+
+  const renderStatusAlert = () => {
+    if (aiStatus === null) return null
+    if (!aiStatus.configured) {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="尚未配置 AI 服务"
+          description="未配置时，企业 AI 补全按钮将不可用"
+        />
+      )
+    }
+    return (
+      <Alert
+        type="success"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={`AI 服务已配置：${aiStatus.provider ?? ''} / ${aiStatus.model ?? ''}`}
+      />
+    )
   }
 
   return (
     <Spin spinning={loading}>
+      {renderStatusAlert()}
+
       <Card>
         <Alert
           type="info"
@@ -300,7 +480,11 @@ function AIPanel() {
         <Form form={form} layout="vertical" onValuesChange={(changed) => {
           if (changed.provider) onProviderChange(changed.provider)
         }}>
-          <Form.Item label="服务商" name="provider" rules={[{ required: true }]}>
+          <Form.Item
+            label="服务商"
+            name="provider"
+            rules={[{ required: true, message: '请选择服务商' }]}
+          >
             <Select
               options={[
                 { value: 'openai', label: 'OpenAI' },
@@ -320,14 +504,21 @@ function AIPanel() {
           >
             <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
-          <Form.Item label="模型" name="model" rules={[{ required: true }]}>
+          <Form.Item
+            label="模型"
+            name="model"
+            rules={[{ required: true, message: '请填写模型名' }]}
+          >
             <Input placeholder="gpt-4o-mini" />
           </Form.Item>
           <Form.Item
             label="API Key"
             name="api_key"
-            rules={[{ required: true, message: '请填写 API Key' }]}
-            extra={current?.api_key_set ? '已设置 Key，保存时如留空将不被允许' : undefined}
+            extra={
+              current?.api_key_set
+                ? '已设置 Key。留空可使用已保存的 Key 进行测试，但保存必填'
+                : '测试连通和保存都需要填写'
+            }
           >
             <Input.Password placeholder="sk-..." />
           </Form.Item>
@@ -350,7 +541,15 @@ function AIPanel() {
             type={testResult.ok ? 'success' : 'error'}
             showIcon
             message={testResult.ok ? '连通成功' : '连通失败'}
-            description={testResult.ok ? `模型回复：${testResult.reply}` : testResult.error}
+            description={
+              testResult.ok ? (
+                <>模型回复：<code>{testResult.reply}</code></>
+              ) : (
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {testResult.error || '未知错误'}
+                </pre>
+              )
+            }
           />
         )}
       </Card>

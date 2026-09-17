@@ -15,7 +15,7 @@ echo.
 set ROOT=%~dp0
 
 REM 启动后端
-start "IndustrialMap-Backend" cmd /k "cd /d %ROOT%backend && if exist .venv (call .venv\Scripts\activate) && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+start "IndustrialMap-Backend" cmd /k "cd /d %ROOT%backend && if exist .venv (call .venv\Scripts\activate) && uvicorn app.main:app --reload --host 127.0.0.1 --port 8765"
 
 REM 启动前端
 start "IndustrialMap-Frontend" cmd /k "cd /d %ROOT%frontend && npm run dev"

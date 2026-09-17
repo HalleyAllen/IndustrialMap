@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import cytoscape from 'cytoscape'
 import coseBilkent from 'cytoscape-cose-bilkent'
 import type { GraphData, GraphNode } from '../types'
+import { relationTypeLabel } from '../types'
 
 // 注册 cose-bilkent 布局（适合企业关系图，力导向 + 避免重叠）
 cytoscape.use(coseBilkent)
@@ -57,7 +58,7 @@ export default function GraphCanvas({ data, height = 'calc(100vh - 200px)', onNo
             id: e.id,
             source: e.source,
             target: e.target,
-            label: e.type,
+            label: relationTypeLabel(e.type),
             color: TYPE_COLORS[e.type] ?? '#8c8c8c',
           },
         })),

@@ -94,7 +94,7 @@ async def get_ai_settings() -> AISettingsOut:
 
 @router.post("/ai", response_model=AISettingsOut)
 async def save_ai_settings(payload: AISettingsIn) -> AISettingsOut:
-    """保存 AI 配置；保存后立即可用于 enrich_company。"""
+    """保存 AI 配置；保存后立即可用于连通性测试等场景。"""
     cfg = settings_db.save_ai_settings(
         provider=payload.provider,
         base_url=payload.base_url,

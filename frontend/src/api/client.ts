@@ -5,7 +5,6 @@ import type {
   AITestResult,
   AIStatus,
   Company,
-  CompanyEnrichOut,
   CompanyIn,
   GraphData,
   GraphStats,
@@ -68,17 +67,6 @@ export const companiesApi = {
   update: (id: string, payload: Partial<CompanyIn>) =>
     http.put<Company>(`/companies/${id}`, payload).then((r) => r.data),
   remove: (id: string) => http.delete<{ deleted: number }>(`/companies/${id}`).then((r) => r.data),
-  enrich: (id: string, params?: { write_back?: boolean; user_hint?: string }) =>
-    http
-      .post<CompanyEnrichOut>(`/companies/${id}/enrich`, null, {
-        params: {
-          write_back: params?.write_back ? 'true' : 'false',
-          user_hint: params?.user_hint,
-        },
-      })
-      .then((r) => r.data),
-  applyEnrichment: (id: string, payload: Record<string, unknown>) =>
-    http.post<{ written: number }>(`/companies/${id}/enrich/apply`, payload).then((r) => r.data),
 }
 
 // ---------------- Relations ----------------

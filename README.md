@@ -4,12 +4,12 @@
 
 ## ✨ 核心特性
 
-- **节点**：企业（`Company`），可扩展自定义属性
+- **节点**：企业（`Company`），仅保留名称属性
 - **标签 / 分类**：行业（`Industry`）
 - **关系**：供货、采购、竞争、合作、子公司、投资、客户等 7 种内置类型
 - **可视化**：Cytoscape.js + cose-bilkent 布局，支持缩放、拖拽、节点点击查看详情
 - **Web 端配置**：管理员可在「设置」页面填写 **Neo4j 连接** 和 **AI 服务**（Base URL / API Key / 模型），无需改代码；配置存储于 `backend/data/industrialmap_settings.db`
-- **AI 信息补全**：兼容 OpenAI `/chat/completions` 协议，支持 OpenAI / DeepSeek / 通义千问 / 智谱 / Ollama / 自建网关，一键补全企业描述、官网、成立年份、地址、规模
+- **AI 服务连通性测试**：兼容 OpenAI `/chat/completions` 协议，支持 OpenAI / DeepSeek / 通义千问 / 智谱 / Ollama / 自建网关，便于验证配置可用性
 
 ## 🧱 技术栈
 
@@ -33,7 +33,7 @@ IndustrialMap/
 │   │   ├── schemas.py           # Pydantic 模型
 │   │   ├── routers/             # REST API 路由
 │   │   │   ├── settings.py      # 数据库配置管理
-│   │   │   ├── companies.py     # 企业 CRUD + AI 补全占位
+│   │   │   ├── companies.py     # 企业 CRUD（仅名称 + 行业）
 │   │   │   ├── industries.py    # 行业 CRUD
 │   │   │   ├── relations.py     # 关系 CRUD
 │   │   │   └── graph.py         # 图谱查询
@@ -105,10 +105,8 @@ npm run dev
 | GET / POST | `/api/settings/ai` | 读取 / 保存 AI 配置 |
 | POST | `/api/settings/ai/test` | 测试 AI 连通性 |
 | GET | `/api/settings/ai/status` | AI 配置状态 |
-| GET / POST / DELETE | `/api/companies` | 企业 CRUD |
+| GET / POST / DELETE | `/api/companies` | 企业 CRUD（仅名称 + 行业） |
 | GET / PUT / DELETE | `/api/companies/{id}` | 企业详情 / 更新 / 删除 |
-| POST | `/api/companies/{id}/enrich` | AI 信息补全（生成但不写回） |
-| POST | `/api/companies/{id}/enrich/apply` | 应用补全结果写回 Neo4j |
 | GET / POST / DELETE | `/api/industries` | 行业 CRUD |
 | POST / DELETE | `/api/relations` | 企业关系（白名单类型） |
 | GET | `/api/relations/types` | 支持的关系类型 |
@@ -116,7 +114,7 @@ npm run dev
 | GET | `/api/graph/full` | 全图或按行业过滤 |
 | GET | `/api/graph/company/{id}` | 某企业周边 N 跳子图 |
 
-## 🤖 AI 信息补全（Web 端配置 + 一键补全）
+## 🤖 AI 服务配置（连通性测试）
 
 **不需要写代码**，打开「系统配置 → AI 服务」Tab 即可：
 
@@ -134,18 +132,13 @@ npm run dev
 | Ollama（本地） | `http://localhost:11434/v1` | `llama3.2` |
 | 自定义 | （自填） | （自填） |
 
-**使用**：在「企业管理」列表中点任一企业的 **⚡ AI 补全** 按钮 → 可选填提示词 → 点「调用 AI 生成建议」→ 编辑建议后「应用建议并写入」。
-
-补全字段：简介、官网、成立年份、地址、规模。写入时仅覆盖空字段，不会破坏人工已填数据。
-
-**底层实现**：通过标准 OpenAI `POST /chat/completions` 调用（用 `httpx` 直连，无第三方 SDK 依赖），要求模型返回 JSON；个别不严格返回 JSON 的模型也能容错解析。
+**底层实现**：通过标准 OpenAI `POST /chat/completions` 调用（用 `httpx` 直连，无第三方 SDK 依赖），仅用于连通性验证。
 
 ## 📝 数据模型
 
 ```cypher
-(:Company {
-  id, description, founded_year, website, address, scale
-})-[:BELONGS_TO]->(:Industry {code, name, description})
+(:Company {id, name})
+-[:BELONGS_TO]->(:Industry {code, name, description})
 
 (:Company)-[:SUPPLIES         ]->(:Company)
 (:Company)-[:PURCHASES_FROM   ]->(:Company)
@@ -173,7 +166,6 @@ CORS_ORIGINS=["http://localhost:5173"]
 
 ## 🛣️ 路线图
 
-- [ ] AI 信息补全（接入 LLM，自动生成描述/官网/成立年份等）
 - [ ] 关系批量导入（CSV / Excel）
 - [ ] 知识图谱推理（基于行业推荐潜在合作）
 - [ ] 权限审计日志
