@@ -1,0 +1,42 @@
+# ===== 敏感信息 / 本地数据（不上传） =====
+# 环境变量文件
+.env
+.env.local
+*.env
+
+# SQLite 配置库（包含 Neo4j 密码、AI API Key）
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 密钥 / 证书
+*.pem
+*.key
+*.crt
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ===== Node =====
+node_modules/
+dist/
+*.local
+
+# ===== 日志 / 临时 =====
+logs/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
