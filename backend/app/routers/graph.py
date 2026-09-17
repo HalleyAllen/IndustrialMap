@@ -1,4 +1,10 @@
-"""图谱查询路由：返回前端图谱可视化所需的节点和边。"""
+"""图谱查询路由：返回前端图谱可视化所需的节点和边。
+
+数据模型（2026 改造后）：
+- 节点：Company + Theme
+- 关系：(Company)-[:BELONGS_TO]->(Theme)
+- 企业关系：(Company)-[SUPPLIES / PARTNER_OF / ...]->(Company)
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -6,151 +12,225 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import neo4j_manager
-from ..schemas import GraphData, GraphEdge, GraphNode, GraphStats
+from ..schemas import GraphData, GraphEdge, GraphNode, GraphStats, ThemeRef
 
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
 
+# ---------------------------- 内部辅助 ----------------------------
+
+def _themes_of(record_themes: Optional[list[dict]]) -> list[ThemeRef]:
+    """Cypher 返回的 themes 列表（dict）→ ThemeRef。"""
+    out: list[ThemeRef] = []
+    if not record_themes:
+        return out
+    for t in record_themes:
+        if not t or not t.get("slug"):
+            continue
+        out.append(
+            ThemeRef(
+                slug=t["slug"],
+                name=t.get("name") or t["slug"],
+                icon=t.get("icon") or "",
+                color=t.get("color") or "#3b82f6",
+            )
+        )
+    return out
+
+
+async def _fetch_themes_for(session, company_id: str) -> list[ThemeRef]:
+    """获取指定企业所属主题列表（按 slug 排序）。"""
+    result = await session.run(
+        """
+        MATCH (c:Company {id: $id})-[:BELONGS_TO]->(t:Theme)
+        RETURN t.slug AS slug, t.name AS name,
+               coalesce(t.icon, '') AS icon,
+               coalesce(t.color, '#3b82f6') AS color
+        ORDER BY t.slug
+        """,
+        id=company_id,
+    )
+    out: list[ThemeRef] = []
+    async for r in result:
+        out.append(ThemeRef(slug=r["slug"], name=r["name"], icon=r["icon"], color=r["color"]))
+    return out
+
+
+# ---------------------------- 统计 ----------------------------
+
 @router.get("/stats", response_model=GraphStats)
 async def graph_stats() -> GraphStats:
-    """返回企业/行业/关系总数。"""
+    """返回企业 / 主题 / 关系总数 + 产业链/环节统计。"""
     session = await neo4j_manager.get_session()
     try:
         result = await session.run(
             """
             MATCH (c:Company) WITH count(c) AS cc
-            MATCH (i:Industry) WITH cc, count(i) AS ic
-            MATCH ()-[r]-() WITH cc, ic, count(r) AS rc
-            RETURN cc AS company_count, ic AS industry_count, rc AS relation_count
+            MATCH (t:Theme) WITH cc, count(t) AS tc
+            MATCH ()-[r]->() WHERE type(r) <> 'BELONGS_TO'
+                AND type(r) <> 'HAS_STAGE'
+                AND type(r) <> 'UPSTREAM_OF'
+                AND type(r) <> 'IN_STAGE'
+                WITH cc, tc, count(r) AS rc
+            MATCH (ch:Chain) WITH cc, tc, rc, count(ch) AS chc
+            MATCH (s:Stage) WITH cc, tc, rc, chc, count(s) AS sc
+            RETURN cc AS company_count,
+                   tc AS theme_count,
+                   rc AS relation_count,
+                   chc AS chain_count,
+                   sc AS stage_count
             """
         )
         record = await result.single()
     finally:
         await session.close()
     if record is None:
-        return GraphStats(company_count=0, industry_count=0, relation_count=0)
+        return GraphStats()
     return GraphStats(
         company_count=record["company_count"],
-        industry_count=record["industry_count"],
+        theme_count=record["theme_count"],
         relation_count=record["relation_count"],
+        chain_count=record["chain_count"],
+        stage_count=record["stage_count"],
     )
 
 
+# ---------------------------- 全图 / 按主题过滤 ----------------------------
+
 @router.get("/full", response_model=GraphData)
 async def full_graph(
-    industry_code: Optional[str] = Query(None, description="按行业筛选（仅显示该行业的企业及其一跳关系）"),
+    theme_slug: Optional[str] = Query(
+        None, description="按主题筛选（仅显示属于该主题的企业及其一跳关系）"
+    ),
     limit: int = Query(300, ge=1, le=2000),
 ) -> GraphData:
-    """返回完整图谱（或按行业过滤后的一跳子图）。
-
-    限制 limit 防止一次拉取过大；前端如需全量可分页或按需筛选。
-    """
+    """返回完整图谱（或按主题过滤后的一跳子图）。"""
     session = await neo4j_manager.get_session()
     try:
-        if industry_code:
-            # 行业内的企业 + 这些企业之间的关系
-            cypher = """
-                MATCH (c:Company)-[:BELONGS_TO]->(i:Industry {code: $industry_code})
-                WITH collect(c) AS companies
-                UNWIND companies AS a
-                OPTIONAL MATCH (a)-[r]->(b)
-                WHERE b IN companies
-                WITH companies, collect(DISTINCT {a: a, b: b, r: r}) AS edges
-                RETURN companies, edges
-            """
-            result = await session.run(cypher, industry_code=industry_code)
-            record = await result.single()
-            if record is None:
+        if theme_slug:
+            # 按主题过滤：先找出属于该主题的企业，再查这些企业之间的关系
+            companies_result = await session.run(
+                """
+                MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+                RETURN c.id AS id, c.name AS name
+                ORDER BY c.name
+                """,
+                slug=theme_slug,
+            )
+            companies = [r async for r in companies_result]
+            if not companies:
                 return GraphData(nodes=[], edges=[])
-            companies = record["companies"]
-            edges_raw = record["edges"]
+
+            node_ids = [c["id"] for c in companies]
+            # 一跳关系
+            rel_result = await session.run(
+                """
+                MATCH (a:Company)-[r]->(b:Company)
+                WHERE a.id IN $ids AND b.id IN $ids
+                  AND type(r) <> 'BELONGS_TO'
+                RETURN a.id AS src, b.id AS tgt, type(r) AS t
+                """,
+                ids=node_ids,
+            )
+            edges = [
+                GraphEdge(
+                    id=f"{r['src']}-{r['t']}-{r['tgt']}",
+                    source=r["src"],
+                    target=r["tgt"],
+                    type=r["t"],
+                )
+                async for r in rel_result
+            ]
+
+            # 节点（含主题信息）
             nodes: list[GraphNode] = []
             for c in companies:
-                ind = await _industry_of(session, c)
-                nodes.append(
-                    GraphNode(
-                        id=c["id"],
-                        name=c["name"],
-                        industry_code=ind[0] if ind else None,
-                        industry_name=ind[1] if ind else None,
-                    )
-                )
-            edges: list[GraphEdge] = []
-            for item in edges_raw:
-                if item["r"] is None:
-                    continue
-                edges.append(
-                    GraphEdge(
-                        id=f"{item['a']['id']}-{type(item['r']).__name__}-{item['b']['id']}",
-                        source=item["a"]["id"],
-                        target=item["b"]["id"],
-                        type=type(item["r"]).__name__,
-                    )
-                )
+                themes = await _fetch_themes_for(session, c["id"])
+                nodes.append(GraphNode(id=c["id"], name=c["name"], themes=themes))
             return GraphData(nodes=nodes, edges=edges)
 
-        # 全图
+        # 全图（按 limit 取前 N 个 + 它们之间的关系）
         result = await session.run(
             """
             MATCH (c:Company)
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(i:Industry)
-            RETURN c.id AS id, c.name AS name,
-                   i.code AS industry_code, i.name AS industry_name
-            ORDER BY c.name LIMIT $limit
+            RETURN c.id AS id, c.name AS name
+            ORDER BY c.name
+            LIMIT $limit
             """,
             limit=limit,
         )
-        nodes = [
-            GraphNode(
-                id=r["id"],
-                name=r["name"],
-                industry_code=r["industry_code"],
-                industry_name=r["industry_name"],
-            )
-            async for r in result
-        ]
-        node_ids = [n.id for n in nodes]
-        if not node_ids:
+        rows = [r async for r in result]
+        if not rows:
             return GraphData(nodes=[], edges=[])
-        result = await session.run(
+        node_ids = [r["id"] for r in rows]
+
+        # 一次性收集所有节点的主题
+        themes_result = await session.run(
+            """
+            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme)
+            WHERE c.id IN $ids
+            RETURN c.id AS cid,
+                   collect({
+                       slug: t.slug, name: t.name,
+                       icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
+                   }) AS themes
+            """,
+            ids=node_ids,
+        )
+        themes_by_cid: dict[str, list[ThemeRef]] = {}
+        async for r in themes_result:
+            themes_by_cid[r["cid"]] = _themes_of(r["themes"])
+
+        nodes = [
+            GraphNode(id=r["id"], name=r["name"], themes=themes_by_cid.get(r["id"], []))
+            for r in rows
+        ]
+
+        # 企业之间的关系（排除 BELONGS_TO）
+        rel_result = await session.run(
             """
             MATCH (a:Company)-[r]->(b:Company)
             WHERE a.id IN $ids AND b.id IN $ids
-            RETURN a.id AS src, b.id AS tgt, type(r) AS type
+              AND type(r) <> 'BELONGS_TO'
+            RETURN a.id AS src, b.id AS tgt, type(r) AS t
             """,
             ids=node_ids,
         )
         edges = [
             GraphEdge(
-                id=f"{r['src']}-{r['type']}-{r['tgt']}",
+                id=f"{r['src']}-{r['t']}-{r['tgt']}",
                 source=r["src"],
                 target=r["tgt"],
-                type=r["type"],
+                type=r["t"],
             )
-            async for r in result
+            async for r in rel_result
         ]
         return GraphData(nodes=nodes, edges=edges)
     finally:
         await session.close()
 
 
+# ---------------------------- 单企业 N 跳邻居 ----------------------------
+
 @router.get("/company/{company_id}", response_model=GraphData)
 async def company_neighborhood(
     company_id: str,
     depth: int = Query(1, ge=1, le=3, description="向外扩展几跳"),
 ) -> GraphData:
-    """返回某企业周边 N 跳的子图。"""
+    """返回某企业周边 N 跳的子图（仅 Company 节点 + 它们之间的关系）。"""
     session = await neo4j_manager.get_session()
     try:
         result = await session.run(
             f"""
             MATCH path = (c:Company {{id: $id}})-[*1..{depth}]-(n)
+            WHERE n:Company
             WITH collect(DISTINCT n) + collect(DISTINCT c) AS ns
             UNWIND ns AS node
             WITH collect(DISTINCT node) AS nodes
             UNWIND nodes AS a
-            OPTIONAL MATCH (a)-[r]->(b) WHERE b IN nodes
+            OPTIONAL MATCH (a)-[r]->(b)
+            WHERE b IN nodes AND type(r) <> 'BELONGS_TO'
             RETURN a, b, type(r) AS t
             """,
             id=company_id,
@@ -161,18 +241,52 @@ async def company_neighborhood(
     if not records:
         raise HTTPException(status_code=404, detail="未找到该企业或无邻居")
 
+    # 收集所有出现过的 Company id
+    cids: set[str] = set()
+    for r in records:
+        if r["a"] is not None and "id" in r["a"]:
+            cids.add(r["a"]["id"])
+        if r["b"] is not None and "id" in r["b"]:
+            cids.add(r["b"]["id"])
+    cids.discard(None)  # type: ignore[arg-type]
+
+    # 一次性批量取主题
+    themes_by_cid: dict[str, list[ThemeRef]] = {}
+    if cids:
+        session2 = await neo4j_manager.get_session()
+        try:
+            tr = await session2.run(
+                """
+                MATCH (c:Company)-[:BELONGS_TO]->(t:Theme)
+                WHERE c.id IN $ids
+                RETURN c.id AS cid,
+                       collect({
+                           slug: t.slug, name: t.name,
+                           icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
+                       }) AS themes
+                """,
+                ids=list(cids),
+            )
+            async for r in tr:
+                themes_by_cid[r["cid"]] = _themes_of(r["themes"])
+        finally:
+            await session2.close()
+
     node_set: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
     for r in records:
         a = r["a"]
         b = r["b"]
         for node in (a, b):
-            if node is None:
+            if node is None or "id" not in node:
                 continue
-            if "id" not in node:
-                continue
-            if node["id"] not in node_set:
-                node_set[node["id"]] = GraphNode(id=node["id"], name=node.get("name", ""))
+            nid = node["id"]
+            if nid not in node_set:
+                node_set[nid] = GraphNode(
+                    id=nid,
+                    name=node.get("name", ""),
+                    themes=themes_by_cid.get(nid, []),
+                )
         if b is not None and r["t"]:
             edges.append(
                 GraphEdge(
@@ -183,18 +297,3 @@ async def company_neighborhood(
                 )
             )
     return GraphData(nodes=list(node_set.values()), edges=edges)
-
-
-async def _industry_of(session, company) -> Optional[tuple[Optional[str], Optional[str]]]:
-    """辅助：根据 Company 节点查询所属行业。"""
-    result = await session.run(
-        """
-        MATCH (c:Company {id: $id})-[:BELONGS_TO]->(i:Industry)
-        RETURN i.code AS code, i.name AS name
-        """,
-        id=company["id"],
-    )
-    record = await result.single()
-    if record is None:
-        return None
-    return record["code"], record["name"]

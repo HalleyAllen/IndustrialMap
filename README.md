@@ -1,15 +1,18 @@
 # IndustrialMap · 企业产业图谱
 
-一个面向"企业 × 行业"关系分析的可视化平台。基于 **Neo4j 图数据库** 存储节点与关系，前端用 **Cytoscape.js** 进行图谱渲染，支持单管理员配置数据库连接。
+一个面向"企业 × 产业"关系分析的可视化平台。基于 **Neo4j 图数据库** 存储节点与关系，前端用 **Cytoscape.js** 进行图谱渲染，支持单管理员配置数据库连接。
 
 ## ✨ 核心特性
 
 - **节点**：企业（`Company`），仅保留名称属性
-- **标签 / 分类**：行业（`Industry`）
+- **两大正交维度**：
+  - **产业主题**（`Theme`）— 横切分类：一个企业可同时属于 1~N 个主题（比亚迪 = 新能源汽车 + 新能源 + 新一代信息技术）
+  - **产业链**（`Chain` / `Stage`）— 纵切关系：把企业按"上下游价值流"串联，回答"我在食物链的哪一级"
+- **17 个预设产业主题**：覆盖战略性新兴产业（10）+ 传统产业（4）+ 现代服务业（3）
+- **5 条示范产业链**：动力电池 / 新能源汽车 / 半导体 / 生物医药 / 光伏，含 200+ 真实上市企业
 - **关系**：供货、采购、竞争、合作、子公司、投资、客户等 7 种内置类型
-- **可视化**：Cytoscape.js + cose-bilkent 布局，支持缩放、拖拽、节点点击查看详情
-- **Web 端配置**：管理员可在「设置」页面填写 **Neo4j 连接** 和 **AI 服务**（Base URL / API Key / 模型），无需改代码；配置存储于 `backend/data/industrialmap_settings.db`
-- **AI 服务连通性测试**：兼容 OpenAI `/chat/completions` 协议，支持 OpenAI / DeepSeek / 通义千问 / 智谱 / Ollama / 自建网关，便于验证配置可用性
+- **可视化**：Cytoscape.js，支持力导向（cose-bilkent）和分层（breadthfirst）两种布局
+- **Web 端配置**：管理员可在「设置」页面填写 **Neo4j 连接** 和 **AI 服务**，无需改代码
 
 ## 🧱 技术栈
 
@@ -31,21 +34,31 @@ IndustrialMap/
 │   │   ├── settings_db.py       # SQLite 配置库（neo4j_settings 单表）
 │   │   ├── neo4j_manager.py     # Neo4j 动态连接（支持热重载）
 │   │   ├── schemas.py           # Pydantic 模型
-│   │   ├── routers/             # REST API 路由
-│   │   │   ├── settings.py      # 数据库配置管理
-│   │   │   ├── companies.py     # 企业 CRUD（仅名称 + 行业）
-│   │   │   ├── industries.py    # 行业 CRUD
-│   │   │   ├── relations.py     # 关系 CRUD
-│   │   │   └── graph.py         # 图谱查询
-│   │   └── services/
-│   │       └── ai_service.py    # 后续接入 LLM
+│   │   └── routers/             # REST API 路由
+│   │       ├── settings.py      # 数据库配置管理
+│   │       ├── companies.py     # 企业 CRUD
+│   │       ├── themes.py        # 产业主题 CRUD（横切分类）
+│   │       ├── chains.py        # 产业链 CRUD + 上下游分析
+│   │       ├── relations.py     # 关系 CRUD
+│   │       └── graph.py         # 图谱查询
+│   ├── scripts/                 # 一键灌入脚本
+│   │   ├── themes.py            # 17 个产业主题定义（emerging/traditional/service）
+│   │   ├── chains.py            # 5 条产业链示范数据（含 200+ 真实企业）
+│   │   ├── seed_themes.py       # 灌入主题（支持 --reset）
+│   │   └── seed_chains.py       # 灌入产业链（支持 --reset --link）
 │   ├── data/                    # SQLite 配置库存放目录（运行时自动创建）
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/               # 页面：配置 / 行业 / 企业 / 图谱
-│   │   ├── components/GraphCanvas.tsx   # Cytoscape 画布
+│   │   ├── pages/               # 页面：配置 / 主题 / 企业 / 图谱 / 产业链
+│   │   │   ├── Settings.tsx
+│   │   │   ├── Themes.tsx       # 主题管理（带分类筛选）
+│   │   │   ├── Companies.tsx
+│   │   │   ├── GraphView.tsx    # 主题视图（按主题着色）
+│   │   │   └── ChainView.tsx    # 产业链视图（按环节分层）
+│   │   ├── components/
+│   │   │   └── GraphCanvas.tsx  # Cytoscape 画布（支持 force/layered 布局）
 │   │   ├── api/client.ts        # axios 客户端
 │   │   └── types/               # TS 类型
 │   ├── package.json
@@ -60,8 +73,6 @@ IndustrialMap/
 
 - 本地：[下载 Neo4j Desktop](https://neo4j.com/download/) 创建本地数据库，记下 Bolt 地址（默认 `bolt://localhost:7687`）和密码
 - 云端：[Neo4j Aura](https://neo4j.com/cloud/aura/) 免费实例可拿到 `neo4j+s://...` 地址
-
-启动 Neo4j，确保能 `bolt://localhost:7687` 连上即可。
 
 ### 1. 启动后端
 
@@ -89,7 +100,7 @@ npm run dev
 
 前端运行在 `http://127.0.0.1:5173`。
 
-打开浏览器，**先去「系统配置」页填入 Neo4j 连接信息并保存**（AI 服务可后填），再去其它页面管理行业 / 企业 / 关系 / 图谱。
+打开浏览器，**先去「系统配置」页填入 Neo4j 连接信息并保存**，再去其它页面管理数据。
 
 ### 一键启动（Windows）
 
@@ -97,22 +108,108 @@ npm run dev
 
 ## 🔌 主要 API
 
+### 设置
 | Method | Path | 说明 |
 |---|---|---|
 | GET / POST | `/api/settings/neo4j` | 读取 / 保存 Neo4j 配置 |
 | POST | `/api/settings/neo4j/test` | 测试连接 |
-| GET | `/api/settings/neo4j/status` | 当前连接状态 |
 | GET / POST | `/api/settings/ai` | 读取 / 保存 AI 配置 |
-| POST | `/api/settings/ai/test` | 测试 AI 连通性 |
-| GET | `/api/settings/ai/status` | AI 配置状态 |
-| GET / POST / DELETE | `/api/companies` | 企业 CRUD（仅名称 + 行业） |
+
+### 企业
+| Method | Path | 说明 |
+|---|---|---|
+| GET / POST | `/api/companies` | 企业列表 / 创建（带主题 slugs） |
 | GET / PUT / DELETE | `/api/companies/{id}` | 企业详情 / 更新 / 删除 |
-| GET / POST / DELETE | `/api/industries` | 行业 CRUD |
+| GET | `/api/companies/by-theme/{slug}` | 主题下的企业 |
+| GET | `/api/companies/{id}/chains` | 企业所在的产业链及环节 |
+
+### 产业主题（横切分类）
+| Method | Path | 说明 |
+|---|---|---|
+| GET / POST | `/api/themes` | 主题列表 / 创建（含 category 分类） |
+| GET / PUT / DELETE | `/api/themes/{slug}` | 主题详情 / 更新 / 删除 |
+| GET | `/api/themes/{slug}/companies` | 主题下的企业 |
+| GET | `/api/themes/{slug}/graph` | 主题下的子图 |
+
+### 产业链（纵切关系）⭐ 2026 新增
+| Method | Path | 说明 |
+|---|---|---|
+| GET | `/api/chains` | 产业链列表 |
+| GET | `/api/chains/{slug}` | 产业链详情（含全部环节） |
+| GET | `/api/chains/{slug}/graph` | 产业链分层图谱（dagre/breadthfirst 布局） |
+| GET | `/api/chains/{slug}/stage/{code}` | 环节详情 + 上下游企业 |
+| GET | `/api/chains/{slug}/stage/{code}/upstream` | 上游分析（断链分析用） |
+| GET | `/api/chains/{slug}/stage/{code}/downstream` | 下游分析 |
+| POST | `/api/chains/{slug}/stage/{code}/companies/{company_id}` | 挂企业到环节 |
+| DELETE | `/api/chains/{slug}/stage/{code}/companies/{company_id}` | 解绑 |
+
+### 关系与图谱
+| Method | Path | 说明 |
+|---|---|---|
 | POST / DELETE | `/api/relations` | 企业关系（白名单类型） |
-| GET | `/api/relations/types` | 支持的关系类型 |
-| GET | `/api/graph/stats` | 统计 |
-| GET | `/api/graph/full` | 全图或按行业过滤 |
+| GET | `/api/graph/stats` | 统计（含 chain_count / stage_count） |
+| GET | `/api/graph/full` | 全图或按主题过滤 |
 | GET | `/api/graph/company/{id}` | 某企业周边 N 跳子图 |
+
+## 📝 数据模型
+
+```cypher
+# 企业（最小节点）
+(:Company {id, name})
+
+# ============ 横切分类：产业主题 ============
+(:Company) -[:BELONGS_TO]-> (:Theme {slug, name, icon, color, category, description})
+# category ∈ {emerging, traditional, service}
+
+# ============ 纵切关系：产业链 ============
+(:Chain {slug, name, icon, color, description})
+  -[:HAS_STAGE {order}]-> (:Stage {chain_slug, code, name, description, level, order})
+                              ↑
+                              |  (:Stage)-[:UPSTREAM_OF]->(:Stage)
+                              |
+(:Company)-[:IN_STAGE {note}]->(:Stage)         # 企业处于产业链某个环节
+
+# ============ 企业间关系 ============
+(:Company)-[:SUPPLIES         ]->(:Company)
+(:Company)-[:PURCHASES_FROM   ]->(:Company)
+(:Company)-[:COMPETES_WITH    ]->(:Company)
+(:Company)-[:PARTNER_OF       ]->(:Company)
+(:Company)-[:SUBSIDIARY_OF    ]->(:Company)
+(:Company)-[:INVESTED_BY      ]->(:Company)
+(:Company)-[:CUSTOMER_OF      ]->(:Company)
+```
+
+### 主题 vs 产业链：什么时候用哪个？
+
+| 场景 | 用主题 | 用产业链 |
+|---|---|---|
+| "全市有多少家 **新能源** 企业？" | ✅ | ❌ 要遍历多链 |
+| "比亚迪上游断了影响谁？" | ❌ | ✅ |
+| "上海市 vs 深圳的 **生物医药** 实力" | ✅ 横切对比 | ❌ 只能比单链 |
+| "政策传导路径分析" | ❌ | ✅ |
+| "招商引才按 **产业** 筛目标" | ✅ | ❌ |
+| "供应链韧性评估 / 卡脖子分析" | ❌ | ✅ |
+
+**两个维度正交，不可互替**。完整产业图谱 = 主题（圈子） + 产业链（食物链）。
+
+## 📦 数据灌入（首次部署）
+
+```bash
+cd backend
+.venv\Scripts\activate
+
+# 1. 灌入 17 个产业主题（幂等）
+python -m scripts.seed_themes
+
+# 2. 灌入 5 条产业链（幂等）
+python -m scripts.seed_chains
+
+# 3. 把示范企业挂到对应环节（按名称精确匹配）
+python -m scripts.seed_chains --link
+# 未匹配的企业会写到 missed_companies.txt
+```
+
+> **重要**：运行前需先在「系统配置」页填好 Neo4j 连接并保存。
 
 ## 🤖 AI 服务配置（连通性测试）
 
@@ -127,27 +224,9 @@ npm run dev
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| 通义千问（DashScope） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-turbo` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-turbo` |
 | 智谱 AI | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
-| Ollama（本地） | `http://localhost:11434/v1` | `llama3.2` |
-| 自定义 | （自填） | （自填） |
-
-**底层实现**：通过标准 OpenAI `POST /chat/completions` 调用（用 `httpx` 直连，无第三方 SDK 依赖），仅用于连通性验证。
-
-## 📝 数据模型
-
-```cypher
-(:Company {id, name})
--[:BELONGS_TO]->(:Industry {code, name, description})
-
-(:Company)-[:SUPPLIES         ]->(:Company)
-(:Company)-[:PURCHASES_FROM   ]->(:Company)
-(:Company)-[:COMPETES_WITH    ]->(:Company)
-(:Company)-[:PARTNER_OF       ]->(:Company)
-(:Company)-[:SUBSIDIARY_OF    ]->(:Company)
-(:Company)-[:INVESTED_BY      ]->(:Company)
-(:Company)-[:CUSTOMER_OF      ]->(:Company)
-```
+| Ollama | `http://localhost:11434/v1` | `llama3.2` |
 
 ## ⚙️ 配置项（backend/.env）
 
@@ -167,5 +246,7 @@ CORS_ORIGINS=["http://localhost:5173"]
 ## 🛣️ 路线图
 
 - [ ] 关系批量导入（CSV / Excel）
-- [ ] 知识图谱推理（基于行业推荐潜在合作）
+- [ ] 知识图谱推理（基于主题推荐潜在合作）
+- [ ] 断链风险分析仪表盘（基于产业链）
+- [ ] 区域产业分布热力图
 - [ ] 权限审计日志

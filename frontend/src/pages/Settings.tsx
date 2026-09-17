@@ -348,7 +348,7 @@ function AIPanel() {
         api_key: '',
         model: cfg.model,
         temperature: cfg.temperature,
-        extra: cfg.extra ?? {},
+        extra: (cfg.extra ?? {}) as any,
       })
     } catch {
       setCurrent(null)

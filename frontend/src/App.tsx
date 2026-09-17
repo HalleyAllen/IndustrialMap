@@ -6,14 +6,16 @@ import {
   BankOutlined,
   SettingOutlined,
   PartitionOutlined,
+  ClusterOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, Navigate } from 'react-router-dom'
 import { settingsApi } from './api/client'
 
 import SettingsPage from './pages/Settings'
-import IndustriesPage from './pages/Industries'
+import ThemesPage from './pages/Themes'
 import CompaniesPage from './pages/Companies'
 import GraphPage from './pages/GraphView'
+import ChainView from './pages/ChainView'
 
 const { Header, Sider, Content } = Layout
 
@@ -43,8 +45,9 @@ export default function App() {
 
   const items = [
     { key: '/graph', icon: <PartitionOutlined />, label: <Link to="/graph">图谱可视化</Link> },
+    { key: '/chains', icon: <ClusterOutlined />, label: <Link to="/chains">产业链</Link> },
     { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">企业管理</Link> },
-    { key: '/industries', icon: <AppstoreOutlined />, label: <Link to="/industries">行业管理</Link> },
+    { key: '/themes', icon: <AppstoreOutlined />, label: <Link to="/themes">主题管理</Link> },
     { key: '/settings', icon: <SettingOutlined />, label: <Link to="/settings">数据库配置</Link> },
   ]
 
@@ -97,8 +100,9 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/graph" replace />} />
             <Route path="/graph" element={<GraphPage />} />
+            <Route path="/chains" element={<ChainView />} />
             <Route path="/companies" element={<CompaniesPage />} />
-            <Route path="/industries" element={<IndustriesPage />} />
+            <Route path="/themes" element={<ThemesPage />} />
             <Route path="/settings" element={<SettingsPage onConfigured={checkStatus} />} />
           </Routes>
         </Content>

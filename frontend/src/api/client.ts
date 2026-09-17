@@ -4,15 +4,20 @@ import type {
   AISettingsOut,
   AITestResult,
   AIStatus,
+  Chain,
+  ChainDetail,
+  ChainGraphData,
   Company,
+  CompanyChain,
   CompanyIn,
   GraphData,
   GraphStats,
-  Industry,
   Neo4jSettingsIn,
   Neo4jSettingsOut,
   Neo4jTestResult,
   RelationIn,
+  StageUpDownStream,
+  Theme,
 } from '../types'
 
 // 开发时 vite.config.ts 代理了 /api -> http://127.0.0.1:8000
@@ -40,7 +45,10 @@ export const settingsApi = {
     http.post<Neo4jSettingsOut>('/settings/neo4j', payload).then((r) => r.data),
   test: (payload: Neo4jSettingsIn) =>
     http.post<Neo4jTestResult>('/settings/neo4j/test', payload).then((r) => r.data),
-  status: () => http.get<{ configured: boolean; connected: boolean; error?: string }>('/settings/neo4j/status').then((r) => r.data),
+  status: () =>
+    http
+      .get<{ configured: boolean; connected: boolean; error?: string }>('/settings/neo4j/status')
+      .then((r) => r.data),
 
   aiGet: () => http.get<AISettingsOut>('/settings/ai').then((r) => r.data),
   aiSave: (payload: AISettingsIn) =>
@@ -50,26 +58,60 @@ export const settingsApi = {
   aiStatus: () => http.get<AIStatus>('/settings/ai/status').then((r) => r.data),
 }
 
-// ---------------- Industries ----------------
-export const industriesApi = {
-  list: () => http.get<Industry[]>('/industries').then((r) => r.data),
-  create: (payload: { code: string; name: string; description?: string }) =>
-    http.post<Industry>('/industries', payload).then((r) => r.data),
-  remove: (code: string) => http.delete<{ deleted: number }>(`/industries/${encodeURIComponent(code)}`).then((r) => r.data),
+// ---------------- 产业主题 (Theme) ----------------
+export const themesApi = {
+  list: () => http.get<Theme[]>('/themes').then((r) => r.data),
+  get: (slug: string) => http.get<Theme & { companies: { id: string; name: string }[] }>(`/themes/${slug}`).then((r) => r.data),
+  create: (payload: { slug: string; name: string; icon?: string; color?: string; category?: string; description?: string }) =>
+    http.post<Theme>('/themes', payload).then((r) => r.data),
+  update: (slug: string, payload: { slug: string; name: string; icon?: string; color?: string; category?: string; description?: string }) =>
+    http.put<Theme>(`/themes/${slug}`, payload).then((r) => r.data),
+  remove: (slug: string, detach = true) =>
+    http
+      .delete<{ deleted_nodes: number; deleted_relations: number }>(`/themes/${slug}`, {
+        params: detach ? { detach: true } : { detach: false },
+      })
+      .then((r) => r.data),
 }
 
-// ---------------- Companies ----------------
+// ---------------- 产业链 (Chain) ----------------
+export const chainsApi = {
+  list: () => http.get<Chain[]>('/chains').then((r) => r.data),
+  get: (slug: string) => http.get<ChainDetail>(`/chains/${slug}`).then((r) => r.data),
+  graph: (slug: string) => http.get<ChainGraphData>(`/chains/${slug}/graph`).then((r) => r.data),
+  stageDetail: (slug: string, code: string) =>
+    http.get<StageUpDownStream>(`/chains/${slug}/stage/${code}`).then((r) => r.data),
+  upstream: (slug: string, code: string) =>
+    http.get<StageUpDownStream>(`/chains/${slug}/stage/${code}/upstream`).then((r) => r.data),
+  downstream: (slug: string, code: string) =>
+    http.get<StageUpDownStream>(`/chains/${slug}/stage/${code}/downstream`).then((r) => r.data),
+  attachCompany: (slug: string, code: string, companyId: string, note = '') =>
+    http
+      .post<{ attached_to: string }>(`/chains/${slug}/stage/${code}/companies/${companyId}`, null, {
+        params: note ? { note } : {},
+      })
+      .then((r) => r.data),
+  detachCompany: (slug: string, code: string, companyId: string) =>
+    http
+      .delete<{ deleted: number }>(`/chains/${slug}/stage/${code}/companies/${companyId}`)
+      .then((r) => r.data),
+  companyChains: (companyId: string) =>
+    http.get<CompanyChain[]>(`/companies/${companyId}/chains`).then((r) => r.data),
+}
+
+// ---------------- 企业 (Company) ----------------
 export const companiesApi = {
-  list: (params?: { keyword?: string; industry_code?: string }) =>
+  list: (params?: { keyword?: string; theme_slug?: string }) =>
     http.get<Company[]>('/companies', { params }).then((r) => r.data),
   get: (id: string) => http.get<Company>(`/companies/${id}`).then((r) => r.data),
   create: (payload: CompanyIn) => http.post<Company>('/companies', payload).then((r) => r.data),
   update: (id: string, payload: Partial<CompanyIn>) =>
     http.put<Company>(`/companies/${id}`, payload).then((r) => r.data),
-  remove: (id: string) => http.delete<{ deleted: number }>(`/companies/${id}`).then((r) => r.data),
+  remove: (id: string) =>
+    http.delete<{ deleted: number }>(`/companies/${id}`).then((r) => r.data),
 }
 
-// ---------------- Relations ----------------
+// ---------------- 关系 ----------------
 export const relationsApi = {
   types: () => http.get<string[]>('/relations/types').then((r) => r.data),
   create: (payload: RelationIn) => http.post('/relations', payload).then((r) => r.data),
@@ -77,10 +119,10 @@ export const relationsApi = {
     http.request({ method: 'DELETE', url: '/relations', data: payload }).then((r) => r.data),
 }
 
-// ---------------- Graph ----------------
+// ---------------- 图谱 ----------------
 export const graphApi = {
   stats: () => http.get<GraphStats>('/graph/stats').then((r) => r.data),
-  full: (params?: { industry_code?: string; limit?: number }) =>
+  full: (params?: { theme_slug?: string; limit?: number }) =>
     http.get<GraphData>('/graph/full', { params }).then((r) => r.data),
   neighborhood: (id: string, depth = 1) =>
     http.get<GraphData>(`/graph/company/${id}`, { params: { depth } }).then((r) => r.data),

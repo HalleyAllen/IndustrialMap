@@ -11,20 +11,19 @@ import {
   Typography,
   message,
   Card,
-  Tabs,
   Tag,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { companiesApi, industriesApi, relationsApi } from '../api/client'
-import type { Company, CompanyIn, Industry, RelationIn } from '../types'
+import { companiesApi, themesApi, relationsApi } from '../api/client'
+import type { Company, CompanyIn, RelationIn, Theme } from '../types'
 import { relationTypeLabel } from '../types'
 
 export default function CompaniesPage() {
   const [data, setData] = useState<Company[]>([])
-  const [industries, setIndustries] = useState<Industry[]>([])
+  const [themes, setThemes] = useState<Theme[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
-  const [filterIndustry, setFilterIndustry] = useState<string | undefined>()
+  const [filterTheme, setFilterTheme] = useState<string | undefined>()
 
   const [editing, setEditing] = useState<Company | null>(null)
   const [open, setOpen] = useState(false)
@@ -46,7 +45,7 @@ export default function CompaniesPage() {
       setData(
         await companiesApi.list({
           keyword: keyword || undefined,
-          industry_code: filterIndustry,
+          theme_slug: filterTheme,
         }),
       )
     } catch (e: any) {
@@ -57,13 +56,13 @@ export default function CompaniesPage() {
   }
 
   useEffect(() => {
-    industriesApi.list().then(setIndustries).catch(() => {})
+    themesApi.list().then(setThemes).catch(() => {})
     relationsApi.types().then(setRelTypes).catch(() => {})
   }, [])
 
   useEffect(() => {
     load()
-  }, [keyword, filterIndustry])
+  }, [keyword, filterTheme])
 
   const onCreate = () => {
     setEditing(null)
@@ -75,7 +74,7 @@ export default function CompaniesPage() {
     setEditing(c)
     form.setFieldsValue({
       name: c.name,
-      industry_code: c.industry_code ?? undefined,
+      theme_slugs: c.themes.map((t) => t.slug),
     })
     setOpen(true)
   }
@@ -85,7 +84,6 @@ export default function CompaniesPage() {
     try {
       values = await form.validateFields()
     } catch {
-      message.error('请先填写企业名称')
       return
     }
     try {
@@ -135,77 +133,110 @@ export default function CompaniesPage() {
     [data],
   )
 
+  // 主题选项（按主题色渲染）
+  const themeOptions = useMemo(
+    () =>
+      themes.map((t) => ({
+        value: t.slug,
+        label: (
+          <span>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 10,
+                height: 10,
+                background: t.color,
+                borderRadius: 2,
+                marginRight: 6,
+              }}
+            />
+            {t.icon ? `${t.icon} ` : ''}
+            {t.name}
+          </span>
+        ),
+        searchLabel: t.slug + ' ' + t.name,
+      })),
+    [themes],
+  )
+
   return (
     <Card>
-      <Tabs
-        defaultActiveKey="list"
-        items={[
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Typography.Title level={3} style={{ margin: 0 }}>企业管理</Typography.Title>
+        <Input.Search
+          placeholder="按名称搜索"
+          allowClear
+          onSearch={setKeyword}
+          style={{ width: 240 }}
+        />
+        <Select
+          placeholder="按主题筛选"
+          allowClear
+          style={{ width: 220 }}
+          options={themeOptions.map((o) => ({ value: o.value, label: o.label }))}
+          onChange={(v) => setFilterTheme(v)}
+          value={filterTheme}
+        />
+        <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
+          新增企业
+        </Button>
+        <Button
+          onClick={() => {
+            relForm.resetFields()
+            setRelOpen(true)
+          }}
+        >
+          建立企业关系
+        </Button>
+      </Space>
+      <Table
+        loading={loading}
+        rowKey="id"
+        dataSource={data}
+        pagination={{ pageSize: 20, showSizeChanger: true }}
+        locale={{ emptyText: '暂无企业，点击右上角「新增企业」开始添加' }}
+        columns={[
+          { title: '企业名称', dataIndex: 'name', width: 320 },
           {
-            key: 'list',
-            label: '企业列表',
-            children: (
-              <>
-                <Space style={{ marginBottom: 16 }} wrap>
-                  <Typography.Title level={3} style={{ margin: 0 }}>企业管理</Typography.Title>
-                  <Input.Search
-                    placeholder="按名称搜索"
-                    allowClear
-                    onSearch={setKeyword}
-                    style={{ width: 240 }}
-                  />
-                  <Select
-                    placeholder="按行业筛选"
-                    allowClear
-                    style={{ width: 200 }}
-                    options={industries.map((i) => ({ value: i.code, label: i.name }))}
-                    onChange={(v) => setFilterIndustry(v)}
-                    value={filterIndustry}
-                  />
-                  <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
-                    新增企业
-                  </Button>
-                  <Button onClick={() => { relForm.resetFields(); setRelOpen(true) }}>
-                    建立企业关系
-                  </Button>
+            title: '所属主题',
+            dataIndex: 'themes',
+            render: (ts: Company['themes']) =>
+              ts && ts.length > 0 ? (
+                <Space wrap>
+                  {ts.map((t) => (
+                    <Tag
+                      key={t.slug}
+                      color={t.color}
+                      style={{ borderRadius: 12 }}
+                    >
+                      {t.icon ? `${t.icon} ` : ''}
+                      {t.name}
+                    </Tag>
+                  ))}
                 </Space>
-                <Table
-                  loading={loading}
-                  rowKey="id"
-                  dataSource={data}
-                  pagination={{ pageSize: 20, showSizeChanger: true }}
-                  locale={{ emptyText: '暂无企业，点击右上角「新增企业」开始添加' }}
-                  columns={[
-                    { title: '企业名称', dataIndex: 'name', width: 320 },
-                    {
-                      title: '所属行业',
-                      dataIndex: 'industry_name',
-                      width: 200,
-                      render: (v) => v ? <Tag color="blue">{v}</Tag> : <Tag>未分类</Tag>,
-                    },
-                    {
-                      title: '操作',
-                      width: 200,
-                      render: (_, r) => (
-                        <Space>
-                          <Button type="link" onClick={() => onEdit(r)}>编辑</Button>
-                          <Popconfirm
-                            title="确定删除？会同时删除其所有关系"
-                            onConfirm={() => onDelete(r.id)}
-                          >
-                            <Button type="link" danger>删除</Button>
-                          </Popconfirm>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
-              </>
+              ) : (
+                <Tag>未分类</Tag>
+              ),
+          },
+          {
+            title: '操作',
+            width: 200,
+            render: (_, r) => (
+              <Space>
+                <Button type="link" onClick={() => onEdit(r)}>编辑</Button>
+                <Popconfirm
+                  title="确定删除？会同时删除其所有关系"
+                  onConfirm={() => onDelete(r.id)}
+                >
+                  <Button type="link" danger>删除</Button>
+                </Popconfirm>
+              </Space>
             ),
           },
         ]}
       />
 
-      {/* 创建 / 编辑企业：只保留名称 + 所属行业 */}
+      {/* 创建 / 编辑企业：名称 + 多选主题 */}
       <Modal
         open={open}
         title={editing ? '编辑企业' : '新增企业'}
@@ -223,13 +254,19 @@ export default function CompaniesPage() {
           >
             <Input placeholder="如：华为技术有限公司" autoFocus />
           </Form.Item>
-          <Form.Item label="所属行业" name="industry_code">
+          <Form.Item
+            label="所属产业主题"
+            name="theme_slugs"
+            rules={[{ required: true, message: '请至少选择 1 个主题', type: 'array', min: 1 }]}
+          >
             <Select
-              allowClear
-              placeholder="选择行业（可留空）"
-              options={industries.map((i) => ({ value: i.code, label: i.name }))}
-              showSearch
-              optionFilterProp="label"
+              mode="multiple"
+              placeholder="选择 1~N 个主题"
+              options={themeOptions}
+              optionFilterProp="searchLabel"
+              filterOption={(input, option: any) =>
+                (option?.searchLabel ?? '').toLowerCase().includes(input.toLowerCase())
+              }
             />
           </Form.Item>
         </Form>
