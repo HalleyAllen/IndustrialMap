@@ -13,8 +13,9 @@ import {
   Card,
   Tag,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { ImportOutlined, PlusOutlined } from '@ant-design/icons'
 import { companiesApi, themesApi, relationsApi } from '../api/client'
+import ImportCompaniesModal from '../components/ImportCompaniesModal'
 import type { Company, CompanyIn, RelationIn, Theme } from '../types'
 import { relationTypeLabel } from '../types'
 
@@ -32,6 +33,8 @@ export default function CompaniesPage() {
   const [relOpen, setRelOpen] = useState(false)
   const [relForm] = Form.useForm<RelationIn>()
   const [relTypes, setRelTypes] = useState<string[]>([])
+
+  const [importOpen, setImportOpen] = useState(false)
 
   const extractError = (e: any): string => {
     const detail = e?.response?.data?.detail
@@ -180,6 +183,9 @@ export default function CompaniesPage() {
         <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
           新增企业
         </Button>
+        <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
+          批量导入
+        </Button>
         <Button
           onClick={() => {
             relForm.resetFields()
@@ -314,6 +320,14 @@ export default function CompaniesPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 批量导入：上传 → 自检 → 确认 */}
+      <ImportCompaniesModal
+        open={importOpen}
+        themes={themes}
+        onClose={() => setImportOpen(false)}
+        onImported={load}
+      />
     </Card>
   )
 }

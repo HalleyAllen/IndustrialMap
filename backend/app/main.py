@@ -7,7 +7,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import chains, companies, graph, relations, settings as settings_router, themes
+from .routers import (
+    chains,
+    companies,
+    graph,
+    imports,
+    relations,
+    settings as settings_router,
+    themes,
+)
 
 
 @asynccontextmanager
@@ -33,6 +41,7 @@ app.include_router(settings_router.router)
 app.include_router(companies.router)
 app.include_router(themes.router)
 app.include_router(chains.router)
+app.include_router(imports.router)
 app.include_router(relations.router)
 app.include_router(graph.router)
 

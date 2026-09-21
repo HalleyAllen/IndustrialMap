@@ -12,9 +12,12 @@ import type {
   CompanyIn,
   GraphData,
   GraphStats,
+  ImportCommitResult,
+  ImportPreview,
   Neo4jSettingsIn,
   Neo4jSettingsOut,
   Neo4jTestResult,
+  OnDuplicate,
   RelationIn,
   StageUpDownStream,
   Theme,
@@ -109,6 +112,53 @@ export const companiesApi = {
     http.put<Company>(`/companies/${id}`, payload).then((r) => r.data),
   remove: (id: string) =>
     http.delete<{ deleted: number }>(`/companies/${id}`).then((r) => r.data),
+}
+
+// ---------------- 企业批量导入 ----------------
+/** 上传参数：文件 + 默认主题 + 冲突策略 */
+function buildImportForm(
+  file: File,
+  defaultSlugs: string[],
+  onDuplicate: OnDuplicate,
+  readThemeColumn: boolean,
+): FormData {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('default_theme_slugs', JSON.stringify(defaultSlugs))
+  fd.append('on_duplicate', onDuplicate)
+  fd.append('read_theme_column', String(readThemeColumn))
+  return fd
+}
+
+export const importApi = {
+  /** 自检：解析文件并与库中数据比对，不写库 */
+  preview: (
+    file: File,
+    defaultSlugs: string[],
+    onDuplicate: OnDuplicate,
+    readThemeColumn: boolean,
+  ) =>
+    http
+      .post<ImportPreview>(
+        '/import/companies/preview',
+        buildImportForm(file, defaultSlugs, onDuplicate, readThemeColumn),
+        { timeout: 120000 },
+      )
+      .then((r) => r.data),
+  /** 确认导入 */
+  commit: (
+    file: File,
+    defaultSlugs: string[],
+    onDuplicate: OnDuplicate,
+    readThemeColumn: boolean,
+  ) =>
+    http
+      .post<ImportCommitResult>(
+        '/import/companies/commit',
+        buildImportForm(file, defaultSlugs, onDuplicate, readThemeColumn),
+        { timeout: 300000 },
+      )
+      .then((r) => r.data),
 }
 
 // ---------------- 关系 ----------------

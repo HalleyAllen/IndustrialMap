@@ -76,6 +76,66 @@ export interface CompanyIn {
   theme_slugs: string[] // 必填，至少 1 个
 }
 
+// ---------------- 企业批量导入 ----------------
+// 两阶段：preview（自检，不写库） → commit（确认后写入）
+export type OnDuplicate = 'skip' | 'update' | 'overwrite'
+
+export const ON_DUPLICATE_LABELS: Record<OnDuplicate, string> = {
+  skip: '跳过（不动已有企业）',
+  update: '合并（保留原有主题，追加新的）',
+  overwrite: '覆盖（用文件中的主题替换原有）',
+}
+
+export interface ImportNewRow {
+  line: number
+  name: string
+  theme_slugs: string[]
+}
+
+export interface ImportIssueRow {
+  line: number
+  name: string
+  reason: string
+  existing_id?: string | null
+  existing_themes: ThemeRef[]
+  first_line?: number | null
+}
+
+export interface ImportPreview {
+  file_name: string
+  encoding: string
+  delimiter: string
+  header_skipped: boolean
+  /** 解析出的数据行数（不含表头与空行） */
+  total_rows: number
+  new_count: number
+  /** 与库中已有企业同名 */
+  conflict_count: number
+  /** 文件内部重复 */
+  file_dup_count: number
+  invalid_count: number
+  /** 按当前策略实际会写入的行数 */
+  importable_count: number
+  new_rows: ImportNewRow[]
+  conflicts: ImportIssueRow[]
+  file_dups: ImportIssueRow[]
+  invalid_rows: ImportIssueRow[]
+  themes_used: ThemeRef[]
+  unknown_themes: string[]
+  db_dup_names: number
+  notes: string[]
+}
+
+export interface ImportCommitResult {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  themes_linked: number
+  duration_ms: number
+  errors: ImportIssueRow[]
+}
+
 // ---------------- 关系 ----------------
 export interface RelationIn {
   from_id: string

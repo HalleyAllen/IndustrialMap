@@ -66,15 +66,15 @@ async def graph_stats() -> GraphStats:
     try:
         result = await session.run(
             """
-            MATCH (c:Company) WITH count(c) AS cc
-            MATCH (t:Theme) WITH cc, count(t) AS tc
-            MATCH ()-[r]->() WHERE type(r) <> 'BELONGS_TO'
+            OPTIONAL MATCH (c:Company) WITH count(c) AS cc
+            OPTIONAL MATCH (t:Theme) WITH cc, count(t) AS tc
+            OPTIONAL MATCH ()-[r]->() WHERE type(r) <> 'BELONGS_TO'
                 AND type(r) <> 'HAS_STAGE'
                 AND type(r) <> 'UPSTREAM_OF'
                 AND type(r) <> 'IN_STAGE'
-                WITH cc, tc, count(r) AS rc
-            MATCH (ch:Chain) WITH cc, tc, rc, count(ch) AS chc
-            MATCH (s:Stage) WITH cc, tc, rc, chc, count(s) AS sc
+            WITH cc, tc, count(r) AS rc
+            OPTIONAL MATCH (ch:Chain) WITH cc, tc, rc, count(ch) AS chc
+            OPTIONAL MATCH (s:Stage) WITH cc, tc, rc, chc, count(s) AS sc
             RETURN cc AS company_count,
                    tc AS theme_count,
                    rc AS relation_count,

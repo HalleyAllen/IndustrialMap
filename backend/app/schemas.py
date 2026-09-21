@@ -150,6 +150,83 @@ class CompanyOut(BaseModel):
     themes: list[ThemeRef] = Field(default_factory=list)
 
 
+# ---------------- 企业批量导入 ----------------
+# 两阶段流程：preview（自检，不写库） → commit（执行导入）
+#
+# 重复判定采用「规范化名称」比对：去首尾空白 → 全角空格转半角 →
+# 连续空白压缩为单个空格 → casefold。原始名称始终原样保留，不被改写。
+class ImportRow(BaseModel):
+    """导入文件中的一行（数据行，不含表头）。"""
+
+    line: int = Field(..., description="原始文件行号，从 1 开始")
+    name: str
+
+
+class ImportNewRow(ImportRow):
+    """可正常导入的新企业。"""
+
+    theme_slugs: list[str] = Field(default_factory=list)
+
+
+class ImportIssueRow(ImportRow):
+    """存在问题（重复 / 无效）的行。"""
+
+    reason: str
+    existing_id: Optional[str] = Field(None, description="库内重复时，命中的企业 id")
+    existing_themes: list[ThemeRef] = Field(
+        default_factory=list, description="库内重复时，该企业现有主题"
+    )
+    first_line: Optional[int] = Field(
+        None, description="文件内重复时，首次出现的行号"
+    )
+
+
+class ImportPreviewOut(BaseModel):
+    """自检报告（不写库）。"""
+
+    file_name: str = ""
+    encoding: str = ""
+    delimiter: str = ""
+    header_skipped: bool = False
+
+    total_rows: int = Field(0, description="解析出的数据行数（不含表头与空行）")
+    new_count: int = 0
+    conflict_count: int = Field(0, description="与库中已有企业重复的行数")
+    file_dup_count: int = Field(0, description="文件内部重复的行数")
+    invalid_count: int = 0
+    importable_count: int = Field(
+        0, description="实际会写入的行数（随 on_duplicate 策略变化）"
+    )
+
+    new_rows: list[ImportNewRow] = Field(default_factory=list)
+    conflicts: list[ImportIssueRow] = Field(default_factory=list)
+    file_dups: list[ImportIssueRow] = Field(default_factory=list)
+    invalid_rows: list[ImportIssueRow] = Field(default_factory=list)
+
+    themes_used: list[ThemeRef] = Field(
+        default_factory=list, description="本次导入会用到、且库中存在的主题"
+    )
+    unknown_themes: list[str] = Field(
+        default_factory=list, description="文件里指定了但库中不存在的主题"
+    )
+    db_dup_names: int = Field(
+        0, description="库中本身已存在的重名企业组数（历史脏数据提示）"
+    )
+    notes: list[str] = Field(default_factory=list)
+
+
+class ImportCommitOut(BaseModel):
+    """执行导入的结果。"""
+
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    failed: int = 0
+    themes_linked: int = 0
+    duration_ms: int = 0
+    errors: list[ImportIssueRow] = Field(default_factory=list)
+
+
 # ---------------- 关系 ----------------
 class RelationIn(BaseModel):
     from_id: str
@@ -178,9 +255,9 @@ class GraphData(BaseModel):
 
 
 class GraphStats(BaseModel):
-    company_count: int
-    theme_count: int
-    relation_count: int
+    company_count: int = 0
+    theme_count: int = 0
+    relation_count: int = 0
     chain_count: int = 0
     stage_count: int = 0
 
