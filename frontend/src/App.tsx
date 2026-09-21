@@ -7,6 +7,7 @@ import {
   SettingOutlined,
   PartitionOutlined,
   ClusterOutlined,
+  TagsOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, Navigate } from 'react-router-dom'
 import { settingsApi } from './api/client'
@@ -14,6 +15,7 @@ import { settingsApi } from './api/client'
 import SettingsPage from './pages/Settings'
 import ThemesPage from './pages/Themes'
 import CompaniesPage from './pages/Companies'
+import IndustriesPage from './pages/Industries'
 import GraphPage from './pages/GraphView'
 import ChainView from './pages/ChainView'
 
@@ -48,6 +50,7 @@ export default function App() {
     { key: '/chains', icon: <ClusterOutlined />, label: <Link to="/chains">产业链</Link> },
     { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">企业管理</Link> },
     { key: '/themes', icon: <AppstoreOutlined />, label: <Link to="/themes">主题管理</Link> },
+    { key: '/industries', icon: <TagsOutlined />, label: <Link to="/industries">行业分类</Link> },
     { key: '/settings', icon: <SettingOutlined />, label: <Link to="/settings">数据库配置</Link> },
   ]
 
@@ -103,6 +106,7 @@ export default function App() {
             <Route path="/chains" element={<ChainView />} />
             <Route path="/companies" element={<CompaniesPage />} />
             <Route path="/themes" element={<ThemesPage />} />
+            <Route path="/industries" element={<IndustriesPage />} />
             <Route path="/settings" element={<SettingsPage onConfigured={checkStatus} />} />
           </Routes>
         </Content>

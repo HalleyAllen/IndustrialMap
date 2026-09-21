@@ -137,17 +137,25 @@ class CompanyIn(BaseModel):
         default_factory=list,
         description="所属产业主题 slugs（1~N 个）。新建企业时至少 1 个。",
     )
+    industry_codes: list[str] = Field(
+        default_factory=list,
+        description="所属国标行业分类 codes（0~N 个，通常选到小类）。",
+    )
 
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     theme_slugs: Optional[list[str]] = None
+    industry_codes: Optional[list[str]] = Field(
+        None, description="国标行业分类 codes。None=不改动，[]=清空。"
+    )
 
 
 class CompanyOut(BaseModel):
     id: str
     name: str
     themes: list[ThemeRef] = Field(default_factory=list)
+    industries: list["IndustryCategoryRef"] = Field(default_factory=list)
 
 
 # ---------------- 企业批量导入 ----------------
@@ -225,6 +233,89 @@ class ImportCommitOut(BaseModel):
     themes_linked: int = 0
     duration_ms: int = 0
     errors: list[ImportIssueRow] = Field(default_factory=list)
+
+
+# ---------------- 行业分类 (IndustryCategory) ----------------
+# 依据 GB/T 4754-2017《国民经济行业分类》，收录制造业门类 C 的完整四级分类：
+#     门类 C 制造业 → 大类(2位) → 中类(3位) → 小类(4位)
+#
+# 数据模型：
+#     (:IndustryCategory {code, name, level, level_name, parent_code, order})
+#         -[:PARENT_OF]-> (:IndustryCategory)
+#     (:Company)-[:IN_INDUSTRY]->(:IndustryCategory)
+#
+# 与「主题」「产业链」并列：主题是业务圈子、产业链是纵切位置，
+# 行业分类是国标口径的统计归属。一个企业可挂多个分类节点。
+class IndustryCategoryRef(BaseModel):
+    """行业分类的精简引用（企业内嵌用）。"""
+
+    code: str
+    name: str
+    level: int = 4
+    level_name: str = ""
+
+
+class IndustryCategoryOut(IndustryCategoryRef):
+    """分类列表项。"""
+
+    parent_code: Optional[str] = None
+    order: int = 0
+    company_count: int = Field(0, description="直接挂在该分类上的企业数")
+    company_count_total: int = Field(0, description="含全部子分类的企业数")
+    has_children: bool = False
+
+
+class IndustryCategoryNode(IndustryCategoryOut):
+    """分类树节点（嵌套 children）。"""
+
+    children: list["IndustryCategoryNode"] = Field(default_factory=list)
+
+
+class IndustryCategoryDetail(IndustryCategoryOut):
+    """分类详情：门类→自身的路径 + 直接子节点 + 企业。"""
+
+    path: list[IndustryCategoryRef] = Field(default_factory=list)
+    children: list[IndustryCategoryOut] = Field(default_factory=list)
+    companies: list["CompanyRef"] = Field(default_factory=list)
+
+
+class IndustryStats(BaseModel):
+    """行业分类总体统计。"""
+
+    standard: str = "GB/T 4754-2017"
+    standard_name: str = "国民经济行业分类"
+    scope_name: str = "制造业"
+    seeded: bool = Field(False, description="Neo4j 中是否已初始化分类数据")
+    total: int = 0
+    level1: int = 0
+    level2: int = 0
+    level3: int = 0
+    level4: int = 0
+    linked_company_count: int = Field(0, description="已挂载行业分类的企业数")
+    relation_count: int = Field(0, description="企业与分类的关联关系数")
+    expected_total: int = Field(0, description="静态目录应有的节点总数")
+    expected_counts: dict[str, int] = Field(
+        default_factory=dict, description="静态目录各级应有数量"
+    )
+
+
+class IndustrySeedResult(BaseModel):
+    """分类数据初始化结果。"""
+
+    reset: bool = False
+    node_count: int = 0
+    relation_count: int = 0
+    created_nodes: int = 0
+    created_relations: int = 0
+    unlinked_companies: int = Field(0, description="reset 时被清除关联的企业数")
+    duration_ms: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class CompanyIndustriesIn(BaseModel):
+    """设置企业所属行业分类（整体替换）。"""
+
+    industry_codes: list[str] = Field(default_factory=list)
 
 
 # ---------------- 关系 ----------------
@@ -398,3 +489,5 @@ class CompanyChainIn(BaseModel):
 
 ThemeDetail.model_rebuild()
 UpDownStreamResult.model_rebuild()
+CompanyOut.model_rebuild()
+IndustryCategoryDetail.model_rebuild()

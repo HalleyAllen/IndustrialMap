@@ -14,6 +14,13 @@ import type {
   GraphStats,
   ImportCommitResult,
   ImportPreview,
+  IndustryCatalog,
+  IndustryCategory,
+  IndustryCategoryDetail,
+  IndustryCategoryNode,
+  IndustryCategoryRef,
+  IndustrySeedResult,
+  IndustryStats,
   Neo4jSettingsIn,
   Neo4jSettingsOut,
   Neo4jTestResult,
@@ -104,7 +111,7 @@ export const chainsApi = {
 
 // ---------------- 企业 (Company) ----------------
 export const companiesApi = {
-  list: (params?: { keyword?: string; theme_slug?: string }) =>
+  list: (params?: { keyword?: string; theme_slug?: string; industry_code?: string }) =>
     http.get<Company[]>('/companies', { params }).then((r) => r.data),
   get: (id: string) => http.get<Company>(`/companies/${id}`).then((r) => r.data),
   create: (payload: CompanyIn) => http.post<Company>('/companies', payload).then((r) => r.data),
@@ -158,6 +165,45 @@ export const importApi = {
         buildImportForm(file, defaultSlugs, onDuplicate, readThemeColumn),
         { timeout: 300000 },
       )
+      .then((r) => r.data),
+}
+
+// ---------------- 行业分类 (IndustryCategory) ----------------
+// 数据源：GB/T 4754-2017《国民经济行业分类》制造业门类 C
+//   C 制造业 → 大类(2位) → 中类(3位) → 小类(4位)，共 820 个节点
+export const industryApi = {
+  /** 静态目录元信息（不依赖数据库，未初始化时也能看规模） */
+  catalog: () => http.get<IndustryCatalog>('/industries/catalog').then((r) => r.data),
+  stats: () => http.get<IndustryStats>('/industries/stats').then((r) => r.data),
+  list: (params?: {
+    level?: number
+    parent_code?: string
+    keyword?: string
+    only_linked?: boolean
+  }) => http.get<IndustryCategory[]>('/industries', { params }).then((r) => r.data),
+  tree: (params?: { only_linked?: boolean }) =>
+    http.get<IndustryCategoryNode[]>('/industries/tree', { params }).then((r) => r.data),
+  get: (code: string, params?: { include_descendants?: boolean; company_limit?: number }) =>
+    http.get<IndustryCategoryDetail>(`/industries/${code}`, { params }).then((r) => r.data),
+  companies: (code: string, params?: { include_descendants?: boolean; limit?: number }) =>
+    http
+      .get<{ id: string; name: string }[]>(`/industries/${code}/companies`, { params })
+      .then((r) => r.data),
+  /** 把国标分类写入数据库。reset=true 会先清空已有分类节点（企业保留，仅解除关联） */
+  seed: (reset = false) =>
+    http
+      .post<IndustrySeedResult>('/industries/seed', null, { params: { reset } })
+      .then((r) => r.data),
+
+  /** 读取某企业挂载的行业分类 */
+  companyIndustries: (companyId: string) =>
+    http.get<IndustryCategoryRef[]>(`/companies/${companyId}/industries`).then((r) => r.data),
+  /** 整体替换某企业的行业分类（传 [] 即清空） */
+  setCompanyIndustries: (companyId: string, codes: string[]) =>
+    http
+      .put<IndustryCategoryRef[]>(`/companies/${companyId}/industries`, {
+        industry_codes: codes,
+      })
       .then((r) => r.data),
 }
 

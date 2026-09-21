@@ -6,8 +6,8 @@ __pycache__/
 venv/
 .env
 
-# SQLite 配置库
-data/
+# SQLite 配置库（仅根目录 data/，不干扰 app/data/ 下的静态资源）
+/data/
 
 # IDE
 .vscode/

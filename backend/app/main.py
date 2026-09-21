@@ -12,6 +12,7 @@ from .routers import (
     companies,
     graph,
     imports,
+    industries,
     relations,
     settings as settings_router,
     themes,
@@ -42,6 +43,7 @@ app.include_router(companies.router)
 app.include_router(themes.router)
 app.include_router(chains.router)
 app.include_router(imports.router)
+app.include_router(industries.router)
 app.include_router(relations.router)
 app.include_router(graph.router)
 

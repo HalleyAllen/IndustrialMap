@@ -12,12 +12,19 @@ import {
   message,
   Card,
   Tag,
+  TreeSelect,
 } from 'antd'
 import { ImportOutlined, PlusOutlined } from '@ant-design/icons'
-import { companiesApi, themesApi, relationsApi } from '../api/client'
+import { companiesApi, themesApi, relationsApi, industryApi } from '../api/client'
 import ImportCompaniesModal from '../components/ImportCompaniesModal'
-import type { Company, CompanyIn, RelationIn, Theme } from '../types'
-import { relationTypeLabel } from '../types'
+import type {
+  Company,
+  CompanyIn,
+  IndustryCategoryNode,
+  RelationIn,
+  Theme,
+} from '../types'
+import { INDUSTRY_LEVEL_COLORS, relationTypeLabel } from '../types'
 
 export default function CompaniesPage() {
   const [data, setData] = useState<Company[]>([])
@@ -25,6 +32,8 @@ export default function CompaniesPage() {
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [filterTheme, setFilterTheme] = useState<string | undefined>()
+  const [filterIndustry, setFilterIndustry] = useState<string | undefined>()
+  const [industryTree, setIndustryTree] = useState<IndustryCategoryNode[]>([])
 
   const [editing, setEditing] = useState<Company | null>(null)
   const [open, setOpen] = useState(false)
@@ -49,6 +58,7 @@ export default function CompaniesPage() {
         await companiesApi.list({
           keyword: keyword || undefined,
           theme_slug: filterTheme,
+          industry_code: filterIndustry,
         }),
       )
     } catch (e: any) {
@@ -61,11 +71,13 @@ export default function CompaniesPage() {
   useEffect(() => {
     themesApi.list().then(setThemes).catch(() => {})
     relationsApi.types().then(setRelTypes).catch(() => {})
+    // 行业分类未初始化时返回空数组，不阻塞页面
+    industryApi.tree().then(setIndustryTree).catch(() => {})
   }, [])
 
   useEffect(() => {
     load()
-  }, [keyword, filterTheme])
+  }, [keyword, filterTheme, filterIndustry])
 
   const onCreate = () => {
     setEditing(null)
@@ -78,6 +90,7 @@ export default function CompaniesPage() {
     form.setFieldsValue({
       name: c.name,
       theme_slugs: c.themes.map((t) => t.slug),
+      industry_codes: c.industries.map((i) => i.code),
     })
     setOpen(true)
   }
@@ -162,6 +175,18 @@ export default function CompaniesPage() {
     [themes],
   )
 
+  // 国标行业分类树（TreeSelect 用），标题格式：`131 谷物磨制`
+  const industryTreeData = useMemo(() => {
+    const build = (nodes: IndustryCategoryNode[]): any[] =>
+      nodes.map((n) => ({
+        value: n.code,
+        title: `${n.code} ${n.name}`,
+        key: n.code,
+        children: n.children?.length ? build(n.children) : undefined,
+      }))
+    return build(industryTree)
+  }, [industryTree])
+
   return (
     <Card>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -179,6 +204,16 @@ export default function CompaniesPage() {
           options={themeOptions.map((o) => ({ value: o.value, label: o.label }))}
           onChange={(v) => setFilterTheme(v)}
           value={filterTheme}
+        />
+        <TreeSelect
+          placeholder="按行业分类筛选（含子类）"
+          allowClear
+          showSearch
+          style={{ width: 260 }}
+          value={filterIndustry}
+          treeData={industryTreeData}
+          onChange={(v) => setFilterIndustry(v)}
+          treeNodeFilterProp="title"
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
           新增企业
@@ -217,6 +252,23 @@ export default function CompaniesPage() {
                     >
                       {t.icon ? `${t.icon} ` : ''}
                       {t.name}
+                    </Tag>
+                  ))}
+                </Space>
+              ) : (
+                <Tag>未分类</Tag>
+              ),
+          },
+          {
+            title: '行业分类（国标）',
+            dataIndex: 'industries',
+            width: 320,
+            render: (is: Company['industries']) =>
+              is && is.length > 0 ? (
+                <Space wrap size={[4, 4]}>
+                  {is.map((i) => (
+                    <Tag key={i.code} color={INDUSTRY_LEVEL_COLORS[i.level]}>
+                      {i.code} {i.name}
                     </Tag>
                   ))}
                 </Space>
@@ -273,6 +325,22 @@ export default function CompaniesPage() {
               filterOption={(input, option: any) =>
                 (option?.searchLabel ?? '').toLowerCase().includes(input.toLowerCase())
               }
+            />
+          </Form.Item>
+          <Form.Item
+            label="国标行业分类"
+            name="industry_codes"
+            extra="可选。依据 GB/T 4754-2017《国民经济行业分类》，通常选到小类；可多选。"
+          >
+            <TreeSelect
+              multiple
+              treeCheckable
+              showSearch
+              allowClear
+              maxTagCount="responsive"
+              treeNodeFilterProp="title"
+              placeholder="选择行业分类（可多选）"
+              treeData={industryTreeData}
             />
           </Form.Item>
         </Form>

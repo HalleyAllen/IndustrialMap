@@ -64,16 +64,18 @@ export interface ThemeRef {
   color: string
 }
 
-// 企业节点：仅保留名称 + 所属主题（多对多）
+// 企业节点：仅保留名称 + 所属主题（多对多）+ 所属国标行业分类（多对多）
 export interface Company {
   id: string
   name: string
   themes: ThemeRef[]
+  industries: IndustryCategoryRef[]
 }
 
 export interface CompanyIn {
   name: string
   theme_slugs: string[] // 必填，至少 1 个
+  industry_codes?: string[] // 国标行业分类，可选
 }
 
 // ---------------- 企业批量导入 ----------------
@@ -292,4 +294,89 @@ export interface AIStatus {
 export interface CompanyEnrichOut {
   company_id: string
   suggestions: Record<string, unknown>
+}
+
+// ---------------- 行业分类 (IndustryCategory) ----------------
+// 依据 GB/T 4754-2017《国民经济行业分类》，收录制造业门类 C 的完整四级分类。
+// 与「主题」「产业链」并列：主题是业务圈子、产业链是纵切位置，行业分类是国标统计归属。
+export interface IndustryCategoryRef {
+  code: string
+  name: string
+  level: number
+  level_name: string
+}
+
+export interface IndustryCategory extends IndustryCategoryRef {
+  parent_code?: string | null
+  order: number
+  /** 直接挂在该分类上的企业数 */
+  company_count: number
+  /** 含全部子分类的企业数 */
+  company_count_total: number
+  has_children: boolean
+}
+
+export interface IndustryCategoryNode extends IndustryCategory {
+  children: IndustryCategoryNode[]
+}
+
+export interface IndustryCategoryDetail extends IndustryCategory {
+  /** 门类 → … → 自身 */
+  path: IndustryCategoryRef[]
+  children: IndustryCategory[]
+  companies: { id: string; name: string }[]
+}
+
+export interface IndustryStats {
+  standard: string
+  standard_name: string
+  scope_name: string
+  seeded: boolean
+  total: number
+  level1: number
+  level2: number
+  level3: number
+  level4: number
+  linked_company_count: number
+  relation_count: number
+  expected_total: number
+  expected_counts: Record<string, number>
+}
+
+export interface IndustryCatalog {
+  standard: string
+  standard_name: string
+  scope_code: string
+  scope_name: string
+  counts: Record<string, number>
+}
+
+export interface IndustrySeedResult {
+  reset: boolean
+  node_count: number
+  relation_count: number
+  created_nodes: number
+  created_relations: number
+  unlinked_companies: number
+  duration_ms: number
+  counts: Record<string, number>
+}
+
+// 国标层级（1=门类 2=大类 3=中类 4=小类）
+export const INDUSTRY_LEVEL_LABELS: Record<number, string> = {
+  1: '门类',
+  2: '大类',
+  3: '中类',
+  4: '小类',
+}
+
+export const INDUSTRY_LEVEL_COLORS: Record<number, string> = {
+  1: 'purple',
+  2: 'geekblue',
+  3: 'cyan',
+  4: 'green',
+}
+
+export function industryLevelLabel(level: number): string {
+  return INDUSTRY_LEVEL_LABELS[level] ?? `L${level}`
 }

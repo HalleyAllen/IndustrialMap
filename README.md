@@ -5,11 +5,12 @@
 ## ✨ 核心特性
 
 - **节点**：企业（`Company`），仅保留名称属性
-- **两大正交维度**：
+- **三个正交维度**：
   - **产业主题**（`Theme`）— 横切分类：一个企业可同时属于 1~N 个主题（比亚迪 = 新能源汽车 + 新能源 + 新一代信息技术）
   - **产业链**（`Chain` / `Stage`）— 纵切关系：把企业按"上下游价值流"串联，回答"我在食物链的哪一级"
 - **17 个预设产业主题**：覆盖战略性新兴产业（10）+ 传统产业（4）+ 现代服务业（3）
 - **5 条示范产业链**：动力电池 / 新能源汽车 / 半导体 / 生物医药 / 光伏，含 200+ 真实上市企业
+- **国标行业分类库**：内置 GB/T 4754-2017 制造业完整四级分类（门类 1 + 大类 31 + 中类 179 + 小类 609 = 820 项），一键写入数据库，企业可多选挂载
 - **关系**：供货、采购、竞争、合作、子公司、投资、客户等 7 种内置类型
 - **企业批量导入**：CSV / TXT 上传，**导入前先自检**（库内重复 / 文件内重复 / 无效行），支持跳过 / 合并 / 覆盖三种冲突策略
 - **可视化**：Cytoscape.js，支持力导向（cose-bilkent）和分层（breadthfirst）两种布局
@@ -35,12 +36,16 @@ IndustrialMap/
 │   │   ├── settings_db.py       # SQLite 配置库（neo4j_settings 单表）
 │   │   ├── neo4j_manager.py     # Neo4j 动态连接（支持热重载）
 │   │   ├── schemas.py           # Pydantic 模型
+│   │   ├── data/                # 静态数据（随代码入库）
+│   │   │   └── industry_categories.json  # GB/T 4754-2017 制造业分类（820 项）
 │   │   └── routers/             # REST API 路由
 │   │       ├── settings.py      # 数据库配置管理
 │   │       ├── companies.py     # 企业 CRUD
 │   │       ├── themes.py        # 产业主题 CRUD（横切分类）
 │   │       ├── chains.py        # 产业链 CRUD + 上下游分析
 │   │       ├── relations.py     # 关系 CRUD
+│   │       ├── imports.py       # 企业批量导入（两阶段自检）
+│   │       ├── industries.py    # 行业分类（国标）查询 + 初始化
 │   │       └── graph.py         # 图谱查询
 │   ├── scripts/                 # 一键灌入脚本
 │   │   ├── themes.py            # 17 个产业主题定义（emerging/traditional/service）
@@ -52,9 +57,10 @@ IndustrialMap/
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/               # 页面：配置 / 主题 / 企业 / 图谱 / 产业链
+│   │   ├── pages/               # 页面：配置 / 主题 / 行业分类 / 企业 / 图谱 / 产业链
 │   │   │   ├── Settings.tsx
 │   │   │   ├── Themes.tsx       # 主题管理（带分类筛选）
+│   │   │   ├── Industries.tsx   # 行业分类（国标树 + 企业统计 + 一键初始化）
 │   │   │   ├── Companies.tsx
 │   │   │   ├── GraphView.tsx    # 主题视图（按主题着色）
 │   │   │   └── ChainView.tsx    # 产业链视图（按环节分层）
