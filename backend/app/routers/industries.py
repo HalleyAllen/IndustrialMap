@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import time
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -56,9 +55,12 @@ _DATA_FILE = (
 
 # ---------------------------- 静态目录 ----------------------------
 
-@lru_cache(maxsize=1)
 def _catalog() -> dict:
-    """加载静态分类目录（读一次后常驻内存）。"""
+    """加载静态分类目录。
+
+    不做 in-process 缓存：JSON 仅 ~300KB，每次读毫秒级；缓存反而会让「修改 JSON
+    后不重启 uvicorn 就看不到新数据」的坑难以排查。
+    """
     with _DATA_FILE.open(encoding="utf-8") as f:
         return json.load(f)
 
@@ -67,7 +69,6 @@ def _catalog_items() -> list[dict]:
     return _catalog()["items"]
 
 
-@lru_cache(maxsize=1)
 def _catalog_index() -> dict[str, dict]:
     return {it["code"]: it for it in _catalog_items()}
 
