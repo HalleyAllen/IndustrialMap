@@ -1,17 +1,18 @@
 """产业主题 (Theme) 管理路由。
 
-数据模型（2026 改造后）：
-    (:Company {id, name}) -[:BELONGS_TO]-> (:Theme {slug, name, icon, color, description})
+数据模型（2026 二次改造后）：
+    (:Company:`新能源` {id, name})   ← 主题 slug 直接作为企业节点的 Neo4j 标签
 
-Theme 是分类维度的"主节点"——企业直接挂主题，不再有 Industry 节点。
-一个企业可挂多个主题；一个主题可包含多个企业。
+Theme 节点保留，但只作为**配置注册表**（slug / name / icon / color /
+category / description），企业不再与其建 BELONGS_TO 关系。
+「主题下的企业」= 带有对应标签的企业节点。
 
 API 设计：
 - GET    /api/themes                  列出所有主题（含企业数）
 - GET    /api/themes/{slug}           主题详情（含企业列表）
 - POST   /api/themes                  创建主题（slug 唯一）
 - PUT    /api/themes/{slug}           更新主题
-- DELETE /api/themes/{slug}           删除主题（同时删除企业的 BELONGS_TO 关系）
+- DELETE /api/themes/{slug}           删除主题（detach=true 时同时移除企业上的标签）
 - GET    /api/themes/{slug}/companies 主题下的企业列表
 - GET    /api/themes/{slug}/graph     主题下的图谱（含 Theme 节点）
 """
@@ -21,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import neo4j_manager
 from ..schemas import CompanyRef, ThemeDetail, ThemeIn, ThemeOut
+from ..theme_labels import escape_label
 
 
 router = APIRouter(prefix="/api/themes", tags=["themes"])
@@ -36,7 +38,8 @@ async def list_themes() -> list[ThemeOut]:
         result = await session.run(
             """
             MATCH (t:Theme)
-            OPTIONAL MATCH (c:Company)-[:BELONGS_TO]->(t)
+            OPTIONAL MATCH (c:Company)
+            WHERE t.slug IN labels(c)
             WITH t, count(DISTINCT c) AS cc
             RETURN t.slug AS slug,
                    t.name AS name,
@@ -101,7 +104,8 @@ async def get_theme(
 
         comp_result = await session.run(
             """
-            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+            MATCH (c:Company)
+            WHERE $slug IN labels(c)
             RETURN c.id AS id, c.name AS name
             ORDER BY c.name
             LIMIT $limit
@@ -218,7 +222,8 @@ async def update_theme(slug: str, payload: ThemeIn) -> ThemeOut:
     try:
         cc_result = await session.run(
             """
-            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+            MATCH (c:Company)
+            WHERE $slug IN labels(c)
             RETURN count(c) AS cc
             """,
             slug=slug,
@@ -244,9 +249,9 @@ async def update_theme(slug: str, payload: ThemeIn) -> ThemeOut:
 @router.delete("/{slug}")
 async def delete_theme(
     slug: str,
-    detach: bool = Query(True, description="是否同时删除企业的 BELONGS_TO 关系"),
+    detach: bool = Query(True, description="是否同时移除企业节点上的该主题标签"),
 ) -> dict:
-    """删除主题。默认 detach=true，会同时删除与企业之间的关联关系。"""
+    """删除主题。默认 detach=true，会同时摘掉所有企业节点上的该主题标签。"""
     session = await neo4j_manager.get_session()
     try:
         exists = await session.run(
@@ -254,6 +259,21 @@ async def delete_theme(
         )
         if (await exists.single()) is None:
             raise HTTPException(status_code=404, detail=f"主题不存在: {slug}")
+
+        labels_removed = 0
+        if detach:
+            # 先数带该标签的企业数，再摘标签（counters 不直接提供标签移除数）
+            cnt = await session.run(
+                "MATCH (c:Company) WHERE $slug IN labels(c) RETURN count(c) AS n",
+                slug=slug,
+            )
+            cnt_record = await cnt.single()
+            labels_removed = cnt_record["n"] if cnt_record else 0
+            # slug 已确认存在于注册表，转义后拼接是安全的
+            rm = await session.run(
+                f"MATCH (c:Company) REMOVE c:`{escape_label(slug)}`",
+            )
+            await rm.consume()
 
         query = (
             "MATCH (t:Theme {slug: $slug}) DETACH DELETE t"
@@ -267,6 +287,7 @@ async def delete_theme(
     return {
         "deleted_nodes": summary.counters.nodes_deleted,
         "deleted_relations": summary.counters.relationships_deleted,
+        "labels_removed": labels_removed,
     }
 
 
@@ -288,7 +309,8 @@ async def list_companies_in_theme(
 
         result = await session.run(
             """
-            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+            MATCH (c:Company)
+            WHERE $slug IN labels(c)
             RETURN c.id AS id, c.name AS name
             ORDER BY c.name
             LIMIT $limit
@@ -343,7 +365,8 @@ async def theme_graph(
 
         comp_result = await session.run(
             """
-            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+            MATCH (c:Company)
+            WHERE $slug IN labels(c)
             RETURN c.id AS id, c.name AS name
             ORDER BY c.name
             LIMIT $limit
@@ -354,6 +377,7 @@ async def theme_graph(
         companies = [r async for r in comp_result]
         for c in companies:
             nodes.append({"id": c["id"], "label": "Company", "name": c["name"]})
+            # 数据层已是标签模型，这里为保持前端图谱形状合成 BELONGS_TO 边
             edges.append(
                 {
                     "id": f"belongs_to:{c['id']}:{slug}",

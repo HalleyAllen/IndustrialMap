@@ -145,12 +145,29 @@ export default function GraphCanvas({
       style={{
         width: '100%',
         height,
-        border: '1px solid #f0f0f0',
-        borderRadius: 6,
-        background: '#fafafa',
+        border: '1px solid #e6eaf0',
+        borderRadius: 8,
+        // 点阵网格 + 浅色渐变，类似白板/画布效果
+        background:
+          'radial-gradient(#dbe3ec 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(180deg, #fcfdff 0%, #f4f7fa 100%)',
+        boxShadow: 'inset 0 1px 3px rgba(15, 23, 42, 0.04)',
+        overflow: 'hidden',
       }}
     />
   )
+}
+
+// 节点多行标签：第一行名称，第二行附加信息（主题名 / 阶段编码）
+// 主题最多展示 3 个，超出用 "…" 截断，避免标签过长
+function formatFullLabel(name: string, themes: ThemeRef[], stageCode?: string | null): string {
+  const sub: string[] = []
+  if (stageCode) sub.push(stageCode)
+  if (themes.length > 0) {
+    const shown = themes.slice(0, 3).map((t) => t.name)
+    if (themes.length > 3) shown.push('…')
+    sub.push(shown.join(' / '))
+  }
+  return sub.length > 0 ? `${name}\n${sub.join('\n')}` : name
 }
 
 // ============== 元素构造（默认模式） ==============
@@ -167,6 +184,8 @@ function buildGraphElements(data: GraphData): cytoscape.ElementDefinition[] {
           fillColor: colors.fill,
           borderColors: colors.borders,
           borderWidth: Math.min(8, 2 + colors.borders.length * 2),
+          // 节点上直接展示：名称 + 所属主题（第二行）
+          fullLabel: formatFullLabel(n.name, n.themes ?? []),
         },
       }
     }),
@@ -228,6 +247,10 @@ function buildChainElements(
           isStage,
           isCompany,
           borderWidth: isCompany ? Math.min(8, 2 + n.themes.length * 2) : 3,
+          // 节点上直接展示：名称 + 附加信息（主题 / 阶段编码）
+          fullLabel: isStage
+            ? formatFullLabel(n.name, [], n.stage_code ?? null)
+            : formatFullLabel(n.name, n.themes ?? []),
         },
       }
     }),
@@ -247,43 +270,62 @@ function buildChainElements(
 
 function buildStyle(): cytoscape.Stylesheet[] {
   return [
+    // 基础节点（企业：圆形）——名称 + 附加信息显示在节点下方，白色圆角"名片"样式
     {
       selector: 'node',
       style: {
         'background-color': 'data(fillColor)',
         'border-color': 'data(borderColor)',
         'border-width': 'data(borderWidth)',
-        'color': 'data(textColor)',
-        'label': 'data(displayName)',
-        'font-size': 12,
-        'text-valign': 'center',
+        'border-opacity': 0.9,
+        'color': '#1f2937',
+        'label': 'data(fullLabel)',
+        'font-size': 11,
+        'text-valign': 'bottom',
         'text-halign': 'center',
-        'text-outline-color': '#000',
-        'text-outline-width': 2,
+        'text-margin-y': 10,
         'text-wrap': 'wrap',
         'text-max-width': '120px',
-        'width': '70px',
-        'height': '70px',
+        'text-background-color': '#ffffff',
+        'text-background-opacity': 1,
+        'text-background-padding': 4,
+        'text-background-shape': 'roundrectangle',
+        'width': '64px',
+        'height': '64px',
+        'transition-property': 'border-width border-color',
+        'transition-duration': 150,
       } as any,
     },
+    // 产业链节点：矩形，标签居中显示在矩形内部
     {
       selector: 'node[label = "Chain"]',
       style: {
         'shape': 'round-rectangle',
-        'width': '120px',
-        'height': '50px',
+        'width': '140px',
+        'height': '54px',
         'font-size': 14,
         'font-weight': 600,
+        'color': 'data(textColor)',
+        'text-valign': 'center',
+        'text-margin-y': 0,
+        'text-background-opacity': 0,
+        'text-max-width': '130px',
       } as any,
     },
+    // 阶段节点：琥珀色矩形
     {
       selector: 'node[label = "Stage"]',
       style: {
         'shape': 'round-rectangle',
-        'width': '130px',
-        'height': '46px',
-        'font-size': 13,
+        'width': '140px',
+        'height': '50px',
+        'font-size': 12,
         'font-weight': 600,
+        'color': 'data(textColor)',
+        'text-valign': 'center',
+        'text-margin-y': 0,
+        'text-background-opacity': 0,
+        'text-max-width': '130px',
       } as any,
     },
     {
@@ -292,33 +334,61 @@ function buildStyle(): cytoscape.Stylesheet[] {
         'shape': 'ellipse',
       } as any,
     },
+    // 悬停高亮
+    {
+      selector: 'node:hover',
+      style: {
+        'border-color': '#faad14',
+        'border-width': 4,
+        'overlay-color': '#faad14',
+        'overlay-opacity': 0.15,
+      } as any,
+    },
+    // 选中高亮
     {
       selector: 'node:selected',
       style: {
         'border-color': '#faad14',
         'border-width': 4,
+        'overlay-color': '#faad14',
+        'overlay-opacity': 0.25,
       },
     },
+    // 边：弱化细节，减少视觉噪音
     {
       selector: 'edge',
       style: {
         'curve-style': 'bezier',
         'target-arrow-shape': 'triangle',
-        'width': 2,
+        'arrow-scale': 0.7,
+        'width': 1.5,
         'line-color': 'data(color)',
+        'line-opacity': 0.65,
         'target-arrow-color': 'data(color)',
+        'target-arrow-opacity': 0.8,
         'label': 'data(label)',
-        'font-size': 10,
-        'color': '#475569',
-        'text-background-color': '#fff',
-        'text-background-opacity': 0.8,
-        'text-background-padding': '2px',
+        'font-size': 9,
+        'color': '#64748b',
+        'text-background-color': '#ffffff',
+        'text-background-opacity': 0.9,
+        'text-background-padding': 3,
+        'text-background-shape': 'roundrectangle',
+        'transition-property': 'width line-opacity',
+        'transition-duration': 150,
+      } as any,
+    },
+    // 悬停时边加粗、变实
+    {
+      selector: 'edge:hover',
+      style: {
+        'width': 3,
+        'line-opacity': 1,
       } as any,
     },
     {
       selector: 'edge[type = "UPSTREAM_OF"]',
       style: {
-        'width': 3,
+        'width': 2.5,
         'curve-style': 'bezier',
       } as any,
     },

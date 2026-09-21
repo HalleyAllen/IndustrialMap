@@ -39,6 +39,13 @@ from ..schemas import (
     ImportPreviewOut,
     ThemeRef,
 )
+from ..theme_labels import (
+    label_remove_clause,
+    label_set_clause,
+    load_theme_registry,
+    refs_from_labels,
+    theme_label_filter_expr,
+)
 
 
 router = APIRouter(prefix="/api/import", tags=["import"])
@@ -47,7 +54,6 @@ _MAX_NAME_LEN = 200
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _BATCH_SIZE = 500
 _THEME_SPLIT = re.compile(r"[|;；、,，/]")
-_DEFAULT_COLOR = "#3b82f6"
 # 首行若整格命中这些词，视为表头而非企业名
 _HEADER_TOKENS = {
     "企业名称", "企业名", "企业", "公司名称", "公司名称全称", "公司", "名称",
@@ -133,22 +139,6 @@ def _parse_slug_param(raw: Optional[str]) -> list[str]:
 
 # ---------------------------- 库侧读取 ----------------------------
 
-def _clean_themes(raw: Optional[list[dict]]) -> list[ThemeRef]:
-    out: list[ThemeRef] = []
-    for t in raw or []:
-        if not t or not t.get("slug"):
-            continue
-        out.append(
-            ThemeRef(
-                slug=t["slug"],
-                name=t.get("name") or t["slug"],
-                icon=t.get("icon") or "",
-                color=t.get("color") or _DEFAULT_COLOR,
-            )
-        )
-    return out
-
-
 async def _load_db_companies(session) -> tuple[dict[str, dict], int]:
     """返回 ``({规范化名: {id, name, themes}}, 库内重名组数)``。
 
@@ -156,17 +146,15 @@ async def _load_db_companies(session) -> tuple[dict[str, dict], int]:
     同规范化名出现多次时保留第一个（按 id 排序保证结果稳定），
     重名组数用于提示历史脏数据。
     """
+    # 主题 = 企业标签 ∩ 主题注册表
+    registry = await load_theme_registry(session)
     result = await session.run(
-        """
+        f"""
         MATCH (c:Company)
-        OPTIONAL MATCH (c)-[:BELONGS_TO]->(t:Theme)
-        WITH c, collect(DISTINCT {
-            slug: t.slug, name: t.name,
-            icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-        }) AS themes
-        RETURN c.id AS id, c.name AS name, themes
+        RETURN c.id AS id, c.name AS name, {theme_label_filter_expr()} AS themeLabels
         ORDER BY c.id
-        """
+        """,
+        themeLabels=list(registry.keys()),
     )
     index: dict[str, dict] = {}
     key_hits: dict[str, int] = {}
@@ -177,7 +165,11 @@ async def _load_db_companies(session) -> tuple[dict[str, dict], int]:
         key_hits[key] = key_hits.get(key, 0) + 1
         index.setdefault(
             key,
-            {"id": r["id"], "name": r["name"], "themes": _clean_themes(r["themes"])},
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "themes": refs_from_labels(r["themeLabels"], registry),
+            },
         )
     dup_groups = sum(1 for n in key_hits.values() if n > 1)
     return index, dup_groups
@@ -478,36 +470,43 @@ async def commit_companies_import(
 
         from_statements = create_rows + update_rows
 
-        # 2) overwrite 策略：先清空这些企业已有的主题关系
+        # 主题注册表：标签白名单（slugs 已在 _analyze 阶段校验过，这里取全集用于摘标签）
+        registry = await load_theme_registry(session)
+        all_theme_slugs = list(registry.keys())
+
+        # 2) overwrite 策略：先摘掉这些企业已有的全部主题标签
         if on_duplicate == "overwrite":
             ids = [r["id"] for r in update_rows]
-            for chunk in _chunks(ids, _BATCH_SIZE):
+            remove_clause = label_remove_clause(all_theme_slugs)
+            if remove_clause:
+                for chunk in _chunks(ids, _BATCH_SIZE):
+                    res = await session.run(
+                        f"""
+                        UNWIND $ids AS cid
+                        MATCH (c:Company {{id: cid}}){remove_clause}
+                        """,
+                        ids=chunk,
+                    )
+                    await res.consume()
+
+        # 3) 打主题标签。标签不能参数化，只能按 slug 分组、逐组批量 SET
+        #    （SET 不存在的标签是幂等的，重复执行不会新增）
+        slug_to_cids: dict[str, list[str]] = {}
+        for r in from_statements:
+            for s in r["slugs"]:
+                slug_to_cids.setdefault(s, []).append(r["id"])
+        for slug in sorted(slug_to_cids):
+            set_clause = label_set_clause([slug])
+            for chunk in _chunks(slug_to_cids[slug], _BATCH_SIZE):
                 res = await session.run(
-                    """
+                    f"""
                     UNWIND $ids AS cid
-                    MATCH (c:Company {id: cid})-[r:BELONGS_TO]->(:Theme)
-                    DELETE r
+                    MATCH (c:Company {{id: cid}}){set_clause}
                     """,
                     ids=chunk,
                 )
                 await res.consume()
-
-        # 3) 建立主题关系（MERGE 保证重复执行不会新增）
-        pairs = [
-            {"cid": r["id"], "slug": s} for r in from_statements for s in r["slugs"]
-        ]
-        for chunk in _chunks(pairs, _BATCH_SIZE):
-            res = await session.run(
-                """
-                UNWIND $pairs AS p
-                MATCH (c:Company {id: p.cid})
-                MATCH (t:Theme {slug: p.slug})
-                MERGE (c)-[:BELONGS_TO]->(t)
-                """,
-                pairs=chunk,
-            )
-            summary = await res.consume()
-            result.themes_linked += summary.counters.relationships_created
+            result.themes_linked += len(slug_to_cids[slug])
 
         result.updated = len(update_rows)
     finally:

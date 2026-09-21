@@ -39,6 +39,7 @@ from ..schemas import (
     StageRef,
     UpDownStreamResult,
 )
+from ..theme_labels import load_theme_registry, refs_from_labels, theme_label_filter_expr
 
 
 router = APIRouter(prefix="/api", tags=["chains"])
@@ -279,34 +280,21 @@ async def chain_graph(slug: str) -> ChainGraphData:
                 )
             )
 
-        # Company 节点 + IN_STAGE 边
+        # Company 节点 + IN_STAGE 边（主题 = 企业标签 ∩ 注册表）
+        registry = await load_theme_registry(session)
         comp_run = await session.run(
-            """
-            MATCH (c:Company)-[:IN_STAGE]->(s:Stage {chain_slug: $slug})
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(t:Theme)
-            WITH c, s, collect({
-                slug: t.slug, name: t.name,
-                icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-            }) AS themes
+            f"""
+            MATCH (c:Company)-[:IN_STAGE]->(s:Stage {{chain_slug: $slug}})
+            WITH c, s, {theme_label_filter_expr()} AS themeLabels
             RETURN c.id AS id, c.name AS name, s.code AS stage_code,
-                   s.order AS stage_order, themes
+                   s.order AS stage_order, themeLabels
             ORDER BY c.name
             """,
             slug=slug,
+            themeLabels=list(registry.keys()),
         )
         async for r in comp_run:
-            # themes 过滤掉空项
-            from ..schemas import ThemeRef
-            themes = [
-                ThemeRef(
-                    slug=t["slug"],
-                    name=t.get("name") or t["slug"],
-                    icon=t.get("icon") or "",
-                    color=t.get("color") or "#3b82f6",
-                )
-                for t in (r["themes"] or [])
-                if t and t.get("slug")
-            ]
+            themes = refs_from_labels(r["themeLabels"], registry)
             nodes.append(
                 ChainGraphNode(
                     id=r["id"],

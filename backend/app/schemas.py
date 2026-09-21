@@ -1,13 +1,15 @@
 """Pydantic 数据模型（请求/响应）。
 
-数据模型（2026 改造后）：
-    (:Company {id, name}) -[:BELONGS_TO]-> (:Theme {slug, name, icon, color, description})
+数据模型（2026 二次改造后）：
+    (:Company:`新能源` {id, name})   ← 产业主题 slug 直接作为企业节点的 Neo4j 标签
+    (:Theme {slug, name, icon, color, description})  ← 仅作为配置注册表
 
 废止：
+- `(Company)-[:BELONGS_TO]->(Theme)` 关系模型：主题改为企业节点标签，
+  标签必须来自 Theme 注册表白名单（详见 `theme_labels.py`）。
 - `Industry`（GB/T 4754 行业）节点：被 `Theme`（产业主题）替代。
   之前是按"经济活动"分类（电池制造 C384 / 风力发电 D4415），现在按
   "产业主题"分类（新能源 / 新能源汽车），更贴合业务语义。
-- 单 `industry_code`：现在一个企业可属于 1~N 个主题 (`theme_slugs`)。
 """
 from __future__ import annotations
 
@@ -135,7 +137,7 @@ class CompanyIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="企业名称")
     theme_slugs: list[str] = Field(
         default_factory=list,
-        description="所属产业主题 slugs（1~N 个）。新建企业时至少 1 个。",
+        description="所属产业主题 slugs（0~N 个，允许暂不分类）。",
     )
     industry_codes: list[str] = Field(
         default_factory=list,

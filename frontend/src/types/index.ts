@@ -74,7 +74,7 @@ export interface Company {
 
 export interface CompanyIn {
   name: string
-  theme_slugs: string[] // 必填，至少 1 个
+  theme_slugs: string[] // 可选，允许 0 个（未分类）
   industry_codes?: string[] // 国标行业分类，可选
 }
 

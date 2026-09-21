@@ -1,13 +1,15 @@
 """企业管理路由。
 
-当前 schema（2026 改造后）：企业节点仅保留 `id` 和 `name` 两个属性，
-分类归属通过 `(Company)-[:BELONGS_TO]->(Theme)` 关系承载（多主题）。
+当前 schema（2026 二次改造后）：企业节点仅保留 `id` 和 `name` 两个属性，
+所属**产业主题直接作为企业节点的 Neo4j 标签**（如 `(:Company:新能源 {id, name})`）。
+Theme 节点仅作为配置注册表（slug / name / icon / color），企业不再与其建关系。
+标签必须来自注册表白名单，拼接前经反引号转义（见 `theme_labels.py`）。
 
 为什么用「产业主题」(Theme) 而不是「行业」(Industry)：
 - 行业（GB/T 4754）按"经济活动"细分（如 C384 电池制造、D4415 风力发电），
   一个企业可能横跨多个行业；
 - 主题按"产业视角"组织（如「新能源」「新能源汽车」），更贴合业务语义；
-- 一个企业可属于 1~N 个主题（如比亚迪 → [新能源汽车, 新能源]）。
+- 一个企业可属于 0~N 个主题（如比亚迪 → [新能源汽车, 新能源]）。
 """
 from __future__ import annotations
 
@@ -25,6 +27,14 @@ from ..schemas import (
     IndustryCategoryRef,
     ThemeRef,
 )
+from ..theme_labels import (
+    label_remove_clause,
+    label_set_clause,
+    load_theme_registry,
+    refs_from_labels,
+    theme_label_filter_expr,
+    validate_slugs,
+)
 from .industries import descendant_codes, validate_industry_codes
 
 
@@ -32,23 +42,6 @@ router = APIRouter(prefix="/api/companies", tags=["companies"])
 
 
 # ---------------------------- 内部工具 ----------------------------
-
-def _themes_to_refs(themes: list[dict | None]) -> list[ThemeRef]:
-    """把 Cypher 返回的 themes 列表（dict）转成 ThemeRef，丢弃空项。"""
-    out: list[ThemeRef] = []
-    for t in themes:
-        if not t or not t.get("slug"):
-            continue
-        out.append(
-            ThemeRef(
-                slug=t["slug"],
-                name=t.get("name") or t["slug"],
-                icon=t.get("icon") or "",
-                color=t.get("color") or "#3b82f6",
-            )
-        )
-    return out
-
 
 def _industries_to_refs(items: list[dict | None]) -> list[IndustryCategoryRef]:
     """把 Cypher 返回的 industries 列表（dict）转成 IndustryCategoryRef。"""
@@ -67,30 +60,20 @@ def _industries_to_refs(items: list[dict | None]) -> list[IndustryCategoryRef]:
     return out
 
 
-def _row_to_company(record: dict) -> CompanyOut:
+def _row_to_company(record: dict, registry: dict[str, ThemeRef]) -> CompanyOut:
     return CompanyOut(
         id=record["id"],
         name=record["name"],
-        themes=_themes_to_refs(record.get("themes") or []),
+        themes=refs_from_labels(record.get("themeLabels") or [], registry),
         industries=_industries_to_refs(record.get("industries") or []),
     )
 
 
-async def _validate_theme_slugs(session, slugs: list[str]) -> None:
-    """校验 theme_slugs 中每个 slug 在 Neo4j 中都存在；缺失则 400。"""
-    if not slugs:
-        return  # 允许空（创建时强制至少 1 个由 schema 校验）
-    result = await session.run(
-        "MATCH (t:Theme) WHERE t.slug IN $slugs RETURN t.slug AS slug",
-        slugs=list(set(slugs)),
-    )
-    found = {r["slug"] async for r in result}
-    missing = [s for s in slugs if s not in found]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"以下主题不存在：{', '.join(missing)}",
-        )
+async def _validate_theme_slugs(
+    session, registry: dict[str, ThemeRef], slugs: list[str]
+) -> list[str]:
+    """白名单校验（注册表来自 Theme 节点）；返回去重排序后的 slug。"""
+    return validate_slugs(registry, slugs)
 
 
 # ---------------------------- 列表 ----------------------------
@@ -110,27 +93,22 @@ async def list_companies(
 
     session = await neo4j_manager.get_session()
     try:
-        # 一个企业可有多个主题/分类。这里先 collect 再判断，
-        # 避免多值匹配把结果行数撑开。
-        cypher = """
+        registry = await load_theme_registry(session)
+        # 一个企业可有多个主题标签。先取标签再判断，避免多值匹配把行数撑开。
+        cypher = f"""
             MATCH (c:Company)
-            WHERE $keyword IS NULL OR c.name CONTAINS $keyword
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(t:Theme)
-            WITH c, collect(DISTINCT {
-                slug: t.slug, name: t.name, icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-            }) AS themes
-            WITH c, themes
-            WHERE $theme_slug IS NULL
-               OR ANY(th IN themes WHERE th.slug = $theme_slug)
+            WHERE ($keyword IS NULL OR c.name CONTAINS $keyword)
+              AND ($theme_slug IS NULL OR $theme_slug IN labels(c))
+            WITH c, {theme_label_filter_expr()} AS themeLabels
             OPTIONAL MATCH (c)-[:IN_INDUSTRY]->(n:IndustryCategory)
-            WITH c, themes, collect(DISTINCT {
+            WITH c, themeLabels, collect(DISTINCT {{
                 code: n.code, name: n.name,
                 level: coalesce(n.level, 4), level_name: coalesce(n.level_name, '')
-            }) AS industries
-            WITH c, themes, industries
+            }}) AS industries
+            WITH c, themeLabels, industries
             WHERE $industry_codes IS NULL
                OR ANY(i IN industries WHERE i.code IN $industry_codes)
-            RETURN c.id AS id, c.name AS name, themes, industries
+            RETURN c.id AS id, c.name AS name, themeLabels, industries
             ORDER BY c.name
             LIMIT $limit
         """
@@ -138,61 +116,49 @@ async def list_companies(
             cypher,
             keyword=keyword,
             theme_slug=theme_slug,
+            themeLabels=list(registry.keys()),
             industry_codes=industry_codes,
             limit=limit,
         )
         records = [r.data() async for r in result]
     finally:
         await session.close()
-    return [_row_to_company(r) for r in records]
+    return [_row_to_company(r, registry) for r in records]
 
 
 # ---------------------------- 创建 ----------------------------
 
 @router.post("", response_model=CompanyOut)
 async def create_company(payload: CompanyIn) -> CompanyOut:
-    """创建企业；同时建立 `(Company)-[:BELONGS_TO]->(Theme)` 关系（多主题）。"""
-    if not payload.theme_slugs:
-        raise HTTPException(status_code=400, detail="请至少选择 1 个产业主题")
-
+    """创建企业；产业主题直接作为企业节点的 Neo4j 标签（0~N 个）。"""
     company_id = str(uuid.uuid4())
     session = await neo4j_manager.get_session()
     try:
-        await _validate_theme_slugs(session, payload.theme_slugs)
+        registry = await load_theme_registry(session)
+        unique_slugs = await _validate_theme_slugs(session, registry, payload.theme_slugs)
         await validate_industry_codes(session, payload.industry_codes)
 
-        # 去重并排序，确保关系建立是稳定的
-        unique_slugs = sorted(set(payload.theme_slugs))
         unique_codes = sorted(set(payload.industry_codes))
+        # 标签不能用参数传，只能在白名单校验后拼接（label_set_clause 内含转义）
         result = await session.run(
-            """
-            CREATE (c:Company {id: $id, name: $name})
+            f"""
+            CREATE (c:Company {{id: $id, name: $name}}){label_set_clause(unique_slugs)}
             WITH c
-            UNWIND $slugs AS slug
-            MATCH (t:Theme {slug: slug})
-            MERGE (c)-[:BELONGS_TO]->(t)
-            WITH DISTINCT c
             UNWIND (CASE WHEN size($codes) = 0 THEN [null] ELSE $codes END) AS icode
-            OPTIONAL MATCH (n:IndustryCategory {code: icode})
+            OPTIONAL MATCH (n:IndustryCategory {{code: icode}})
             FOREACH (_ IN CASE WHEN n IS NULL THEN [] ELSE [1] END |
                 MERGE (c)-[:IN_INDUSTRY]->(n)
             )
             WITH DISTINCT c
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(t2:Theme)
-            WITH c, collect(DISTINCT {
-                slug: t2.slug, name: t2.name,
-                icon: coalesce(t2.icon, ''), color: coalesce(t2.color, '#3b82f6')
-            }) AS themes
             OPTIONAL MATCH (c)-[:IN_INDUSTRY]->(n2:IndustryCategory)
-            RETURN c.id AS id, c.name AS name, themes,
-                   collect(DISTINCT {
+            RETURN c.id AS id, c.name AS name, labels(c) AS themeLabels,
+                   collect(DISTINCT {{
                        code: n2.code, name: n2.name,
                        level: coalesce(n2.level, 4), level_name: coalesce(n2.level_name, '')
-                   }) AS industries
+                   }}) AS industries
             """,
             id=company_id,
             name=payload.name,
-            slugs=unique_slugs,
             codes=unique_codes,
         )
         record = await result.single()
@@ -200,7 +166,7 @@ async def create_company(payload: CompanyIn) -> CompanyOut:
         await session.close()
     if record is None:
         raise HTTPException(status_code=500, detail="创建企业失败")
-    return _row_to_company(record)
+    return _row_to_company(record.data(), registry)
 
 
 # ---------------------------- 详情 ----------------------------
@@ -209,29 +175,27 @@ async def create_company(payload: CompanyIn) -> CompanyOut:
 async def get_company(company_id: str) -> CompanyOut:
     session = await neo4j_manager.get_session()
     try:
+        registry = await load_theme_registry(session)
         result = await session.run(
-            """
-            MATCH (c:Company {id: $id})
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(t:Theme)
-            WITH c, collect(DISTINCT {
-                slug: t.slug, name: t.name,
-                icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-            }) AS themes
+            f"""
+            MATCH (c:Company {{id: $id}})
+            WITH c, {theme_label_filter_expr()} AS themeLabels
             OPTIONAL MATCH (c)-[:IN_INDUSTRY]->(n:IndustryCategory)
-            RETURN c.id AS id, c.name AS name, themes,
-                   collect(DISTINCT {
+            RETURN c.id AS id, c.name AS name, themeLabels,
+                   collect(DISTINCT {{
                        code: n.code, name: n.name,
                        level: coalesce(n.level, 4), level_name: coalesce(n.level_name, '')
-                   }) AS industries
+                   }}) AS industries
             """,
             id=company_id,
+            themeLabels=list(registry.keys()),
         )
         record = await result.single()
     finally:
         await session.close()
     if record is None:
         raise HTTPException(status_code=404, detail="企业不存在")
-    return _row_to_company(record)
+    return _row_to_company(record.data(), registry)
 
 
 # ---------------------------- 更新 ----------------------------
@@ -253,14 +217,14 @@ async def update_company(company_id: str, payload: CompanyUpdate) -> CompanyOut:
         if (await exists.single()) is None:
             raise HTTPException(status_code=404, detail="企业不存在")
 
+        registry = await load_theme_registry(session)
+
         # 仅在用户显式提供时校验
         if payload.theme_slugs is not None:
-            await _validate_theme_slugs(session, payload.theme_slugs)
+            unique_slugs = validate_slugs(registry, payload.theme_slugs)
         if payload.industry_codes is not None:
             await validate_industry_codes(session, payload.industry_codes)
 
-        # 注意：Neo4j 不允许在 FOREACH 内使用 UNWIND，所以两个维度都拆成
-        # 「先删后建」两条语句，而不是拼成一条带 CASE 的大语句。
         if payload.name is not None:
             await session.run(
                 "MATCH (c:Company {id: $id}) SET c.name = $name",
@@ -268,22 +232,17 @@ async def update_company(company_id: str, payload: CompanyUpdate) -> CompanyOut:
                 name=payload.name,
             )
 
-        # ---- 主题：None 不动 / [] 清空 / [..] 替换 ----
+        # ---- 主题标签：None 不动 / [] 清空 / [..] 替换 ----
+        # 先 REMOVE 注册表内的全部主题标签（没有该标签时 REMOVE 是空操作），
+        # 再 SET 新标签。标签经白名单校验 + 反引号转义后拼接。
         if payload.theme_slugs is not None:
-            await session.run(
-                "MATCH (c:Company {id: $id})-[r:BELONGS_TO]->(:Theme) DELETE r",
-                id=company_id,
-            )
-            if payload.theme_slugs:
+            clause = label_remove_clause(list(registry.keys()))
+            if unique_slugs:
+                clause += label_set_clause(unique_slugs)
+            if clause:
                 await session.run(
-                    """
-                    MATCH (c:Company {id: $id})
-                    UNWIND $slugs AS slug
-                    MATCH (t:Theme {slug: slug})
-                    MERGE (c)-[:BELONGS_TO]->(t)
-                    """,
+                    f"MATCH (c:Company {{id: $id}}){clause}",
                     id=company_id,
-                    slugs=sorted(set(payload.theme_slugs)),
                 )
 
         # ---- 行业分类：同样的三态语义 ----
@@ -305,31 +264,27 @@ async def update_company(company_id: str, payload: CompanyUpdate) -> CompanyOut:
                 )
 
         result = await session.run(
-            """
-            MATCH (c:Company {id: $id})
-            // SET c = {id, name} 清理历史残留属性
-            SET c = {id: c.id, name: c.name}
-            WITH c
-            OPTIONAL MATCH (c)-[:BELONGS_TO]->(t:Theme)
-            WITH c, collect(DISTINCT {
-                slug: t.slug, name: t.name,
-                icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-            }) AS themes
+            f"""
+            MATCH (c:Company {{id: $id}})
+            // 重置属性为 id/name，清理历史残留字段
+            SET c = {{id: c.id, name: c.name}}
+            WITH c, {theme_label_filter_expr()} AS themeLabels
             OPTIONAL MATCH (c)-[:IN_INDUSTRY]->(n:IndustryCategory)
-            RETURN c.id AS id, c.name AS name, themes,
-                   collect(DISTINCT {
+            RETURN c.id AS id, c.name AS name, themeLabels,
+                   collect(DISTINCT {{
                        code: n.code, name: n.name,
                        level: coalesce(n.level, 4), level_name: coalesce(n.level_name, '')
-                   }) AS industries
+                   }}) AS industries
             """,
             id=company_id,
+            themeLabels=list(registry.keys()),
         )
         record = await result.single()
     finally:
         await session.close()
     if record is None:
         raise HTTPException(status_code=404, detail="企业不存在")
-    return _row_to_company(record)
+    return _row_to_company(record.data(), registry)
 
 
 # ---------------------------- 删除 ----------------------------

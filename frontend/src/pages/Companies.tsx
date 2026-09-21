@@ -315,7 +315,7 @@ export default function CompaniesPage() {
           <Form.Item
             label="所属产业主题"
             name="theme_slugs"
-            rules={[{ required: true, message: '请至少选择 1 个主题', type: 'array', min: 1 }]}
+            extra="可以不选，暂未分类的企业在图中显示为灰色"
           >
             <Select
               mode="multiple"

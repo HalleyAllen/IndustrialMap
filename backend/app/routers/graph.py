@@ -1,8 +1,7 @@
 """图谱查询路由：返回前端图谱可视化所需的节点和边。
 
-数据模型（2026 改造后）：
-- 节点：Company + Theme
-- 关系：(Company)-[:BELONGS_TO]->(Theme)
+数据模型（2026 二次改造后）：
+- 节点：Company（产业主题作为其 Neo4j 标签）+ Theme（仅配置注册表）
 - 企业关系：(Company)-[SUPPLIES / PARTNER_OF / ...]->(Company)
 """
 from __future__ import annotations
@@ -13,6 +12,11 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import neo4j_manager
 from ..schemas import GraphData, GraphEdge, GraphNode, GraphStats, ThemeRef
+from ..theme_labels import (
+    load_theme_registry,
+    refs_from_labels,
+    theme_label_filter_expr,
+)
 
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
@@ -20,40 +24,23 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 
 # ---------------------------- 内部辅助 ----------------------------
 
-def _themes_of(record_themes: Optional[list[dict]]) -> list[ThemeRef]:
-    """Cypher 返回的 themes 列表（dict）→ ThemeRef。"""
-    out: list[ThemeRef] = []
-    if not record_themes:
-        return out
-    for t in record_themes:
-        if not t or not t.get("slug"):
-            continue
-        out.append(
-            ThemeRef(
-                slug=t["slug"],
-                name=t.get("name") or t["slug"],
-                icon=t.get("icon") or "",
-                color=t.get("color") or "#3b82f6",
-            )
-        )
-    return out
-
-
-async def _fetch_themes_for(session, company_id: str) -> list[ThemeRef]:
-    """获取指定企业所属主题列表（按 slug 排序）。"""
+async def _themes_for(session, company_ids: list[str]) -> dict[str, list[ThemeRef]]:
+    """批量获取企业主题：企业标签 ∩ 主题注册表。返回 {company_id: [ThemeRef]}。"""
+    if not company_ids:
+        return {}
+    registry = await load_theme_registry(session)
     result = await session.run(
-        """
-        MATCH (c:Company {id: $id})-[:BELONGS_TO]->(t:Theme)
-        RETURN t.slug AS slug, t.name AS name,
-               coalesce(t.icon, '') AS icon,
-               coalesce(t.color, '#3b82f6') AS color
-        ORDER BY t.slug
+        f"""
+        MATCH (c:Company)
+        WHERE c.id IN $ids
+        RETURN c.id AS cid, {theme_label_filter_expr()} AS themeLabels
         """,
-        id=company_id,
+        ids=company_ids,
+        themeLabels=list(registry.keys()),
     )
-    out: list[ThemeRef] = []
+    out: dict[str, list[ThemeRef]] = {}
     async for r in result:
-        out.append(ThemeRef(slug=r["slug"], name=r["name"], icon=r["icon"], color=r["color"]))
+        out[r["cid"]] = refs_from_labels(r["themeLabels"], registry)
     return out
 
 
@@ -109,10 +96,11 @@ async def full_graph(
     session = await neo4j_manager.get_session()
     try:
         if theme_slug:
-            # 按主题过滤：先找出属于该主题的企业，再查这些企业之间的关系
+            # 按主题过滤：先找出属于该主题的企业（主题 = 企业标签），再查它们之间的关系
             companies_result = await session.run(
                 """
-                MATCH (c:Company)-[:BELONGS_TO]->(t:Theme {slug: $slug})
+                MATCH (c:Company)
+                WHERE $slug IN labels(c)
                 RETURN c.id AS id, c.name AS name
                 ORDER BY c.name
                 """,
@@ -144,10 +132,15 @@ async def full_graph(
             ]
 
             # 节点（含主题信息）
-            nodes: list[GraphNode] = []
-            for c in companies:
-                themes = await _fetch_themes_for(session, c["id"])
-                nodes.append(GraphNode(id=c["id"], name=c["name"], themes=themes))
+            themes_by_cid = await _themes_for(session, node_ids)
+            nodes: list[GraphNode] = [
+                GraphNode(
+                    id=c["id"],
+                    name=c["name"],
+                    themes=themes_by_cid.get(c["id"], []),
+                )
+                for c in companies
+            ]
             return GraphData(nodes=nodes, edges=edges)
 
         # 全图（按 limit 取前 N 个 + 它们之间的关系）
@@ -165,22 +158,8 @@ async def full_graph(
             return GraphData(nodes=[], edges=[])
         node_ids = [r["id"] for r in rows]
 
-        # 一次性收集所有节点的主题
-        themes_result = await session.run(
-            """
-            MATCH (c:Company)-[:BELONGS_TO]->(t:Theme)
-            WHERE c.id IN $ids
-            RETURN c.id AS cid,
-                   collect({
-                       slug: t.slug, name: t.name,
-                       icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-                   }) AS themes
-            """,
-            ids=node_ids,
-        )
-        themes_by_cid: dict[str, list[ThemeRef]] = {}
-        async for r in themes_result:
-            themes_by_cid[r["cid"]] = _themes_of(r["themes"])
+        # 一次性收集所有节点的主题（标签 ∩ 注册表）
+        themes_by_cid = await _themes_for(session, node_ids)
 
         nodes = [
             GraphNode(id=r["id"], name=r["name"], themes=themes_by_cid.get(r["id"], []))
@@ -250,25 +229,12 @@ async def company_neighborhood(
             cids.add(r["b"]["id"])
     cids.discard(None)  # type: ignore[arg-type]
 
-    # 一次性批量取主题
+    # 一次性批量取主题（标签 ∩ 注册表）；上面 session 已关闭，这里新开一个
     themes_by_cid: dict[str, list[ThemeRef]] = {}
     if cids:
         session2 = await neo4j_manager.get_session()
         try:
-            tr = await session2.run(
-                """
-                MATCH (c:Company)-[:BELONGS_TO]->(t:Theme)
-                WHERE c.id IN $ids
-                RETURN c.id AS cid,
-                       collect({
-                           slug: t.slug, name: t.name,
-                           icon: coalesce(t.icon, ''), color: coalesce(t.color, '#3b82f6')
-                       }) AS themes
-                """,
-                ids=list(cids),
-            )
-            async for r in tr:
-                themes_by_cid[r["cid"]] = _themes_of(r["themes"])
+            themes_by_cid = await _themes_for(session2, list(cids))
         finally:
             await session2.close()
 
