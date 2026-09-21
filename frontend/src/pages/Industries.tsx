@@ -3,14 +3,12 @@ import type { ReactNode } from 'react'
 import {
   Alert,
   Breadcrumb,
-  Button,
   Card,
   Col,
   Descriptions,
   Empty,
   Input,
   List,
-  Popconfirm,
   Row,
   Space,
   Spin,
@@ -22,8 +20,6 @@ import {
 } from 'antd'
 import {
   ApartmentOutlined,
-  DatabaseOutlined,
-  ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
 import { industryApi } from '../api/client'
@@ -141,7 +137,6 @@ export default function IndustriesPage() {
   const [stats, setStats] = useState<IndustryStats | null>(null)
   const [tree, setTree] = useState<IndustryCategoryNode[]>([])
   const [loading, setLoading] = useState(false)
-  const [seeding, setSeeding] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [expandedKeys, setExpandedKeys] = useState<string[]>([])
   const [selectedCode, setSelectedCode] = useState<string | null>(null)
@@ -178,26 +173,6 @@ export default function IndustriesPage() {
     }
   }, [])
 
-  const handleSeed = async (reset: boolean) => {
-    setSeeding(true)
-    try {
-      const res = await industryApi.seed(reset)
-      message.success(
-        `初始化完成：分类节点 ${res.node_count} 个、层级关系 ${res.relation_count} 条（${res.duration_ms} ms）`,
-      )
-      if (reset && res.unlinked_companies > 0) {
-        message.info(`已解除 ${res.unlinked_companies} 家企业的分类关联（企业本身未删除）`)
-      }
-      setDetail(null)
-      setSelectedCode(null)
-      await loadTree()
-    } catch (e) {
-      message.error((e as Error).message || '初始化失败')
-    } finally {
-      setSeeding(false)
-    }
-  }
-
   const filteredTree = useMemo(() => filterTree(tree, keyword), [tree, keyword])
   const treeData = useMemo(() => toTreeData(filteredTree), [filteredTree])
 
@@ -227,36 +202,6 @@ export default function IndustriesPage() {
             <Typography.Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
               {stats ? `${stats.standard}《${stats.standard_name}》· ${stats.scope_name}` : ''}
             </Typography.Text>
-          </Space>
-        }
-        extra={
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={loadTree} loading={loading}>
-              刷新
-            </Button>
-            {stats?.seeded ? (
-              <Popconfirm
-                title="确认重置国标分类数据？"
-                description="会清空已有分类节点并重新写入。企业不会被删除，但企业的分类关联会被解除。"
-                okText="确认重置"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => handleSeed(true)}
-              >
-                <Button danger icon={<DatabaseOutlined />} loading={seeding}>
-                  重置国标数据
-                </Button>
-              </Popconfirm>
-            ) : (
-              <Button
-                type="primary"
-                icon={<DatabaseOutlined />}
-                loading={seeding}
-                onClick={() => handleSeed(false)}
-              >
-                一键初始化
-              </Button>
-            )}
           </Space>
         }
       >
@@ -290,10 +235,10 @@ export default function IndustriesPage() {
             message="数据库中还没有行业分类数据"
             description={
               <span>
-                点击右上角「一键初始化」，可写入 {stats.standard}《{stats.standard_name}》
-                {stats.scope_name}门类的完整四级分类，预期 {stats.expected_total} 个节点
-                （大类 {stats.expected_counts.level1 ?? 31} + 中类{' '}
+                数据库中暂无行业分类节点（预期 {stats.expected_total} 个，
+                大类 {stats.expected_counts.level1 ?? 31} + 中类{' '}
                 {stats.expected_counts.level2 ?? 179} + 小类 {stats.expected_counts.level3 ?? 609}）。
+                需通过后端接口 <code>POST /api/industries/seed</code> 初始化。
               </span>
             }
           />
@@ -316,7 +261,7 @@ export default function IndustriesPage() {
             ) : treeData.length === 0 ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={stats?.seeded ? '暂无分类数据' : '请先初始化国标分类数据'}
+                description={stats?.seeded ? '暂无分类数据' : '数据库中暂无分类节点，请通过后端 API 初始化'}
               />
             ) : (
               <Tree
