@@ -1,7 +1,7 @@
 """行业分类 (IndustryCategory) 管理路由。
 
-数据来源：GB/T 4754-2017《国民经济行业分类》，收录制造业门类 C 的完整四级分类：
-    门类 C 制造业 → 大类(2位) → 中类(3位) → 小类(4位)，共 820 个节点。
+数据来源：GB/T 4754-2017《国民经济行业分类》，收录制造业完整三级分类：
+    大类(2位) → 中类(3位) → 小类(4位)，共 819 个节点。
 静态数据随代码走（backend/app/data/industry_categories.json），可离线浏览、可重复初始化。
 
 数据模型：
@@ -73,7 +73,7 @@ def _catalog_index() -> dict[str, dict]:
 
 
 def _path_of(code: str) -> list[IndustryCategoryRef]:
-    """沿 parent_code 上溯，返回 门类 → … → 自身 的路径。"""
+    """沿 parent_code 上溯，返回 大类 → … → 自身 的路径。"""
     index = _catalog_index()
     chain: list[IndustryCategoryRef] = []
     cur = index.get(code)
@@ -125,7 +125,7 @@ def _row_to_ref(row: dict) -> IndustryCategoryRef:
     return IndustryCategoryRef(
         code=row["code"],
         name=row["name"],
-        level=row.get("level") or 4,
+        level=row.get("level") or 3,
         level_name=row.get("level_name") or "",
     )
 
@@ -137,7 +137,7 @@ async def _fetch_categories(session) -> list[dict]:
         MATCH (n:IndustryCategory)
         RETURN n.code AS code,
                n.name AS name,
-               coalesce(n.level, 4) AS level,
+               coalesce(n.level, 3) AS level,
                coalesce(n.level_name, '') AS level_name,
                n.parent_code AS parent_code,
                coalesce(n.order, 0) AS order
@@ -168,7 +168,7 @@ async def _fetch_categories(session) -> list[dict]:
     # 子级（不含自身）挂载的企业数
     desc = await session.run(
         """
-        MATCH (n:IndustryCategory)-[:PARENT_OF*1..3]->(d:IndustryCategory)
+        MATCH (n:IndustryCategory)-[:PARENT_OF*1..2]->(d:IndustryCategory)
               <-[:IN_INDUSTRY]-(c:Company)
         RETURN n.code AS code, count(DISTINCT c) AS cnt
         """
@@ -279,7 +279,7 @@ async def industry_stats() -> IndustryStats:
         node_run = await session.run(
             """
             MATCH (n:IndustryCategory)
-            WITH coalesce(n.level, 4) AS lv, count(*) AS c
+            WITH coalesce(n.level, 3) AS lv, count(*) AS c
             RETURN collect({level: lv, count: c}) AS dist,
                    sum(c) AS total
             """
@@ -310,7 +310,6 @@ async def industry_stats() -> IndustryStats:
         level1=dist.get(1, 0),
         level2=dist.get(2, 0),
         level3=dist.get(3, 0),
-        level4=dist.get(4, 0),
         linked_company_count=(link_rec["cc"] if link_rec else 0) or 0,
         relation_count=(link_rec["rc"] if link_rec else 0) or 0,
         expected_total=counts["total"],
@@ -404,7 +403,7 @@ async def seed_industries(
 
 @router.get("/industries", response_model=list[IndustryCategoryOut])
 async def list_industries(
-    level: Optional[int] = Query(None, ge=1, le=4, description="只看某一层级"),
+    level: Optional[int] = Query(None, ge=1, le=3, description="只看某一层级"),
     parent_code: Optional[str] = Query(None, description="只看某节点的直接子节点"),
     keyword: Optional[str] = Query(None, description="按编码或名称模糊搜索"),
     only_linked: bool = Query(False, description="只看有企业挂载的分类"),
@@ -460,7 +459,7 @@ async def get_industry(
         True, description="企业列表是否包含子分类下的企业"
     ),
 ) -> IndustryCategoryDetail:
-    """分类详情：门类→自身路径、直接子节点、关联企业。"""
+    """分类详情：大类→自身路径、直接子节点、关联企业。"""
     session = await neo4j_manager.get_session()
     try:
         rows = await _fetch_categories(session)
@@ -514,7 +513,7 @@ async def get_industry(
             comp_run = await session.run(
                 """
                 MATCH (n:IndustryCategory {code: $code})
-                      -[:PARENT_OF*0..3]->(d:IndustryCategory)
+                      -[:PARENT_OF*0..2]->(d:IndustryCategory)
                       <-[:IN_INDUSTRY]-(c:Company)
                 RETURN DISTINCT c.id AS id, c.name AS name
                 ORDER BY c.name
@@ -555,7 +554,7 @@ async def list_companies_in_industry(
         cypher = (
             """
             MATCH (n:IndustryCategory {code: $code})
-                  -[:PARENT_OF*0..3]->(d:IndustryCategory)
+                  -[:PARENT_OF*0..2]->(d:IndustryCategory)
                   <-[:IN_INDUSTRY]-(c:Company)
             RETURN DISTINCT c.id AS id, c.name AS name
             ORDER BY c.name
@@ -596,7 +595,7 @@ async def get_company_industries(company_id: str) -> list[IndustryCategoryRef]:
             """
             MATCH (c:Company {id: $id})-[:IN_INDUSTRY]->(n:IndustryCategory)
             RETURN n.code AS code, n.name AS name,
-                   coalesce(n.level, 4) AS level,
+                   coalesce(n.level, 3) AS level,
                    coalesce(n.level_name, '') AS level_name
             ORDER BY n.code
             """,
@@ -641,7 +640,7 @@ async def set_company_industries(
             OPTIONAL MATCH (c)-[:IN_INDUSTRY]->(n2:IndustryCategory)
             RETURN collect(DISTINCT {
                 code: n2.code, name: n2.name,
-                level: coalesce(n2.level, 4),
+                level: coalesce(n2.level, 3),
                 level_name: coalesce(n2.level_name, '')
             }) AS industries
             """,

@@ -236,8 +236,8 @@ class ImportCommitOut(BaseModel):
 
 
 # ---------------- 行业分类 (IndustryCategory) ----------------
-# 依据 GB/T 4754-2017《国民经济行业分类》，收录制造业门类 C 的完整四级分类：
-#     门类 C 制造业 → 大类(2位) → 中类(3位) → 小类(4位)
+# 依据 GB/T 4754-2017《国民经济行业分类》，收录制造业完整三级分类：
+#     大类(2位) → 中类(3位) → 小类(4位)
 #
 # 数据模型：
 #     (:IndustryCategory {code, name, level, level_name, parent_code, order})
@@ -251,7 +251,7 @@ class IndustryCategoryRef(BaseModel):
 
     code: str
     name: str
-    level: int = 4
+    level: int = 3
     level_name: str = ""
 
 
@@ -272,7 +272,7 @@ class IndustryCategoryNode(IndustryCategoryOut):
 
 
 class IndustryCategoryDetail(IndustryCategoryOut):
-    """分类详情：门类→自身的路径 + 直接子节点 + 企业。"""
+    """分类详情：大类→自身的路径 + 直接子节点 + 企业。"""
 
     path: list[IndustryCategoryRef] = Field(default_factory=list)
     children: list[IndustryCategoryOut] = Field(default_factory=list)
@@ -290,7 +290,6 @@ class IndustryStats(BaseModel):
     level1: int = 0
     level2: int = 0
     level3: int = 0
-    level4: int = 0
     linked_company_count: int = Field(0, description="已挂载行业分类的企业数")
     relation_count: int = Field(0, description="企业与分类的关联关系数")
     expected_total: int = Field(0, description="静态目录应有的节点总数")

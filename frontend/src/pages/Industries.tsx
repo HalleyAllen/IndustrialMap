@@ -225,7 +225,7 @@ export default function IndustriesPage() {
             <ApartmentOutlined />
             行业分类
             <Typography.Text type="secondary" style={{ fontWeight: 400, fontSize: 13 }}>
-              {stats ? `${stats.standard}《${stats.standard_name}》· ${stats.scope_name}门类` : ''}
+              {stats ? `${stats.standard}《${stats.standard_name}》· ${stats.scope_name}` : ''}
             </Typography.Text>
           </Space>
         }
@@ -262,16 +262,13 @@ export default function IndustriesPage() {
       >
         <Row gutter={[16, 16]}>
           <Col xs={12} md={4}>
-            <Statistic title="门类" value={stats?.level1 ?? 0} />
+            <Statistic title="大类（2位）" value={stats?.level1 ?? 0} />
           </Col>
           <Col xs={12} md={4}>
-            <Statistic title="大类（2位）" value={stats?.level2 ?? 0} />
+            <Statistic title="中类（3位）" value={stats?.level2 ?? 0} />
           </Col>
           <Col xs={12} md={4}>
-            <Statistic title="中类（3位）" value={stats?.level3 ?? 0} />
-          </Col>
-          <Col xs={12} md={4}>
-            <Statistic title="小类（4位）" value={stats?.level4 ?? 0} />
+            <Statistic title="小类（4位）" value={stats?.level3 ?? 0} />
           </Col>
           <Col xs={12} md={4}>
             <Statistic
@@ -295,8 +292,8 @@ export default function IndustriesPage() {
               <span>
                 点击右上角「一键初始化」，可写入 {stats.standard}《{stats.standard_name}》
                 {stats.scope_name}门类的完整四级分类，预期 {stats.expected_total} 个节点
-                （门类 1 + 大类 {stats.expected_counts.level2 ?? 31} + 中类{' '}
-                {stats.expected_counts.level3 ?? 179} + 小类 {stats.expected_counts.level4 ?? 609}）。
+                （大类 {stats.expected_counts.level1 ?? 31} + 中类{' '}
+                {stats.expected_counts.level2 ?? 179} + 小类 {stats.expected_counts.level3 ?? 609}）。
               </span>
             }
           />
